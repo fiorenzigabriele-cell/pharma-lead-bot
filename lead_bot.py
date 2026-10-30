@@ -58,7 +58,7 @@ def search_ted_tenders():
         return ""
 
 def analyze_all_with_ai(combined_text, api_key):
-    """Invia il materiale a Gemini Flash usando il modello standard supportato dall'SDK"""
+    """Invia il materiale a Gemini usando il modello corrente gemini-3.8-flash"""
     try:
         client = genai.Client(api_key=api_key)
         
@@ -83,9 +83,9 @@ def analyze_all_with_ai(combined_text, api_key):
         ]
         """
         
-        # AGGIORNATO: Impostato il modello universale nativo per l'SDK genai
+        # AGGIORNATO: Impostato il modello gemini-3.8-flash richiesto esplicitamente dal server di Google
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-3.8-flash',
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json"
