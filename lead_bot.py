@@ -9,6 +9,8 @@ from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
 import pandas as pd
+from google import genai
+from google.genai import types
 
 # --- CONFIGURAZIONE ---
 WEB_QUERIES = [
@@ -56,50 +58,42 @@ def search_ted_tenders():
         return ""
 
 def analyze_all_with_ai(combined_text, api_key):
-    """Invia il materiale a Gemini Flash impostando l'indirizzo esatto dell'endpoint"""
-    # L'URL deve contenere obbligatoriamente il comando :generateContent finale
-    url = "https://googleapis.com"
-    query_params = {"key": api_key}
-    
-    prompt = f"""
-    Sei un analista B2B esperto nel settore farmaceutico in Europa. Analizza il seguente testo proveniente da ricerche sul Web e bandi pubblici europei (TED).
-    Identifica aziende farmaceutiche, CDMO o enti pubblici che richiedono o stanno per acquistare macchine di Ispezione Visiva Automatica (AVI) e sistemi di controllo integrità/leak test (CCIT, HVLD, Vacuum Decay).
-    
-    Scarta lo spam, i rivenditori di componenti usati e i laboratori accademici minori. Concentrati su siti di produzione e linee industriali in Europa.
-
-    Testo da analizzare:
-    {combined_text}
-    
-    Rispondi fornendo unicamente un array JSON con la struttura qui sotto. Se non trovi nulla restituisci []. Non aggiungere introduzioni.
-    [
-      {{
-        "Canale": "Web" o "Bando TED",
-        "Azienda_O_Ente": "Nome dell'azienda o ente",
-        "Paese": "Nazione Europea",
-        "Opportunita_Rilevata": "Spiegazione del motivo",
-        "Dettaglio_Fonte": "Contesto trovato"
-      }}
-    ]
-    """
-    
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}]
-    }
-    
+    """Invia il materiale a Gemini Flash usando l'SDK nativo ufficiale di Google"""
     try:
-        res = requests.post(url, params=query_params, json=payload, timeout=25)
+        # Inizializzazione ufficiale del client di Google
+        client = genai.Client(api_key=api_key)
         
-        if res.status_code != 200:
-            print(f"Errore API Gemini (Stato {res.status_code}): {res.text}")
-            return pd.DataFrame()
-            
-        res_json = res.json()
+        prompt = f"""
+        Sei un analista B2B esperto nel settore farmaceutico in Europa. Analizza il seguente testo proveniente da ricerche sul Web e bandi pubblici europei (TED).
+        Identifica aziende farmaceutiche, CDMO o enti pubblici che richiedono o stanno per acquistare macchine di Ispezione Visiva Automatica (AVI) e sistemi di controllo integrità/leak test (CCIT, HVLD, Vacuum Decay).
         
-        if 'candidates' in res_json and len(res_json['candidates']) > 0:
-            text_response = res_json['candidates']['content']['parts']['text']
-        else:
-            print("Gemini ha risposto ma la struttura dei dati non contiene testo valido.")
-            return pd.DataFrame()
+        Scarta lo spam, i rivenditori di componenti usati e i laboratori accademici minori. Concentrati su siti di produzione e linee industriali in Europa.
+
+        Testo da analizzare:
+        {combined_text}
+        
+        Rispondi fornendo unicamente un array JSON con la struttura qui sotto. Se non trovi nulla restituisci []. Non aggiungere introduzioni.
+        [
+          {{
+            "Canale": "Web" o "Bando TED",
+            "Azienda_O_Ente": "Nome dell'azienda o ente",
+            "Paese": "Nazione Europea",
+            "Opportunita_Rilevata": "Spiegazione del motivo",
+            "Dettaglio_Fonte": "Contesto trovato"
+          }}
+        ]
+        """
+        
+        # Chiamata nativa sicura configurata per richiedere JSON puro
+        response = client.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json"
+            ),
+        )
+        
+        text_response = response.text
         
         match = re.search(r'\[.*\]', text_response, re.DOTALL)
         if match:
@@ -111,7 +105,7 @@ def analyze_all_with_ai(combined_text, api_key):
         return pd.DataFrame(data_dicts)
         
     except Exception as e:
-        print(f"Errore durante l'elaborazione dei dati dell'AI: {e}")
+        print(f"Errore durante l'elaborazione nativa dell'AI: {e}")
         return pd.DataFrame()
 
 def send_email_with_excel(file_path, to_email, from_email, app_password):
