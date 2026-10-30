@@ -56,11 +56,9 @@ def search_ted_tenders():
         return ""
 
 def analyze_all_with_ai(combined_text, api_key):
-    """Invia il materiale a Gemini Flash isolando la chiave API dall'URL di testo"""
-    # L'URL fisso garantisce che non si verifichino deformazioni di stringa sull'host
+    """Invia il materiale a Gemini Flash impostando l'indirizzo esatto dell'endpoint"""
+    # L'URL deve contenere obbligatoriamente il comando :generateContent finale
     url = "https://googleapis.com"
-    
-    # Passiamo la chiave come parametro di query strutturato
     query_params = {"key": api_key}
     
     prompt = f"""
@@ -89,7 +87,6 @@ def analyze_all_with_ai(combined_text, api_key):
     }
     
     try:
-        # requests unisce i parametri in modo sicuro senza intaccare l'host primario
         res = requests.post(url, params=query_params, json=payload, timeout=25)
         
         if res.status_code != 200:
