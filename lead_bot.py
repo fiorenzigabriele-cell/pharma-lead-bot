@@ -17,10 +17,6 @@ WEB_QUERIES = [
     '"HVLD" OR "vacuum decay" pharmaceutical line Europe'
 ]
 
-# Codici CPV relativi a macchinari farmaceutici/industriali per stringere la ricerca su TED
-# 42921300 (Macchine per l'imbottigliamento o il confezionamento), 33100000 (Dispositivi medici/laboratorio)
-TED_CPV_CODES = ["42920000", "42921300", "38540000"] 
-
 def search_web_free(query):
     """Estrae notizie dal web simulando una ricerca in HTML (Gratis)"""
     url = f"https://duckduckgo.com{query}"
@@ -34,7 +30,6 @@ def search_web_free(query):
 def search_ted_tenders():
     """Interroga l'API pubblica e gratuita del portale TED europeo per gli ultimi 7 giorni"""
     seven_days_ago = (datetime.now() - timedelta(days=7)).strftime('%Y%m%d')
-    # Query esperta per l'API di TED v3
     ted_query = f"publication-date >= {seven_days_ago} AND (FT ~ 'visual inspection' OR FT ~ 'CCIT' OR FT ~ 'leak test')"
     
     url = "https://europa.eu"
@@ -61,7 +56,8 @@ def search_ted_tenders():
 
 def analyze_all_with_ai(combined_text, api_key):
     """Invia tutto il materiale a Gemini Flash per estrarre e filtrare i lead industriali"""
-    url = f"https://googleapis.com{api_key}"
+    url = "https://googleapis.com"
+    params = {"key": api_key}
     
     prompt = f"""
     Sei un analista B2B esperto nel settore farmaceutico in Europa. Analizza il seguente testo proveniente da ricerche sul Web e bandi pubblici europei (TED).
@@ -86,9 +82,8 @@ def analyze_all_with_ai(combined_text, api_key):
     
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     try:
-        res = requests.post(url, json=payload, timeout=20)
-        text_response = res.json()['candidates'][0]['content']['parts'][0]['text']
-        # Pulisce eventuali formattazioni markdown inviate dall'AI
+        res = requests.post(url, params=params, json=payload, timeout=20)
+        text_response = res.json()['candidates']['content']['parts']['text']
         clean_json = text_response.replace("```json", "").replace("```", "").strip()
         return pd.read_json(clean_json)
     except Exception as e:
@@ -128,7 +123,6 @@ if __name__ == "__main__":
     EMAIL_PASS = os.getenv("EMAIL_PASS")       
     RECEIVER_EMAIL = os.getenv("RECEIVER_EMAIL") 
     
-    # 1. Raccolta dati da fonti eterogenee
     raw_data_compiled = ""
     
     print("Scansione bandi di gara TED...")
@@ -139,13 +133,10 @@ if __name__ == "__main__":
     for q in WEB_QUERIES:
         raw_data_compiled += f"--- RISULTATI WEB PER QUERY: {q} ---\n" + search_web_free(q) + "\n"
         
-    # 2. Elaborazione Intelligente
     print("Analisi in corso con l'AI...")
     df_leads = analyze_all_with_ai(raw_data_compiled, GEMINI_API_KEY)
     
-    # 3. Creazione Excel e Spedizione
     if not df_leads.empty:
-        # Rimuove eventuali duplicati basati sul nome dell'azienda o ente
         df_leads = df_leads.drop_duplicates(subset=['Azienda_O_Ente'])
         file_name = "Report_Settimanale_Lead_Totale.xlsx"
         df_leads.to_excel(file_name, index=False)
