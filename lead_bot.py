@@ -24,7 +24,7 @@ def search_web_free(query):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     try:
         response = requests.get(url, headers=headers, timeout=10)
-        return response.text[:3000] # Ridotto leggermente per evitare problemi di dimensioni token
+        return response.text[:3000]
     except Exception:
         return ""
 
@@ -56,9 +56,11 @@ def search_ted_tenders():
         return ""
 
 def analyze_all_with_ai(combined_text, api_key):
-    """Invia il materiale a Gemini Flash gestendo gli errori di risposta in modo sicuro"""
-    # Utilizzo dell'endpoint V1 standard
-    url = f"https://googleapis.com{api_key}"
+    """Invia il materiale a Gemini Flash pulendo preventivamente la chiave API"""
+    # Rimuove chirurgicamente spazi, tabulazioni e 'a capo' dalla chiave
+    clean_key = str(api_key).strip().replace("\n", "").replace("\r", "")
+    
+    url = f"https://googleapis.com{clean_key}"
     
     prompt = f"""
     Sei un analista B2B esperto nel settore farmaceutico in Europa. Analizza il seguente testo proveniente da ricerche sul Web e bandi pubblici europei (TED).
@@ -88,21 +90,18 @@ def analyze_all_with_ai(combined_text, api_key):
     try:
         res = requests.post(url, json=payload, timeout=25)
         
-        # Se la risposta dell'API fallisce (es. 400 o 403), stampiamo l'errore chiaro
         if res.status_code != 200:
             print(f"Errore API Gemini (Stato {res.status_code}): {res.text}")
             return pd.DataFrame()
             
         res_json = res.json()
         
-        # Navigazione sicura nei nodi dell'oggetto di risposta di Google
         if 'candidates' in res_json and len(res_json['candidates']) > 0:
-            text_response = res_json['candidates'][0]['content']['parts'][0]['text']
+            text_response = res_json['candidates']['content']['parts']['text']
         else:
             print("Gemini ha risposto ma la struttura dei dati non contiene testo valido.")
             return pd.DataFrame()
         
-        # Estrazione chirurgica del testo JSON racchiuso tra parentesi quadre
         match = re.search(r'\[.*\]', text_response, re.DOTALL)
         if match:
             clean_json = match.group(0)
@@ -134,20 +133,22 @@ def send_email_with_excel(file_path, to_email, from_email, app_password):
         msg.attach(part)
         
     try:
+        # Pulisce anche le credenziali email per sicurezza
         server = smtplib.SMTP('://gmail.com', 587)
         server.starttls()
-        server.login(from_email, app_password)
-        server.sendmail(from_email, to_email, msg.as_string())
+        server.login(from_email.strip(), app_password.strip())
+        server.sendmail(from_email.strip(), to_email.strip(), msg.as_string())
         server.quit()
         print("Email inviata con successo!")
     except Exception as e:
         print(f"Errore invio email: {e}")
 
 if __name__ == "__main__":
-    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-    EMAIL_USER = os.getenv("EMAIL_USER")       
-    EMAIL_PASS = os.getenv("EMAIL_PASS")       
-    RECEIVER_EMAIL = os.getenv("RECEIVER_EMAIL") 
+    # Caricamento e pulizia immediata delle variabili
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+    EMAIL_USER = os.getenv("EMAIL_USER", "").strip()       
+    EMAIL_PASS = os.getenv("EMAIL_PASS", "").strip()       
+    RECEIVER_EMAIL = os.getenv("RECEIVER_EMAIL", "").strip() 
     
     raw_data_compiled = ""
     
