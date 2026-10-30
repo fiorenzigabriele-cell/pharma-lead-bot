@@ -24,7 +24,7 @@ def search_web_free(query):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     try:
         response = requests.get(url, headers=headers, timeout=10)
-        return response.text[:4000] 
+        return response.text[:3000] # Ridotto leggermente per evitare problemi di dimensioni token
     except Exception:
         return ""
 
@@ -37,7 +37,7 @@ def search_ted_tenders():
     payload = {
         "q": ted_query,
         "fields": ["notice-identifier", "title", "summary", "buyer", "place-of-performance"],
-        "limit": 20
+        "limit": 15
     }
     
     try:
@@ -56,9 +56,9 @@ def search_ted_tenders():
         return ""
 
 def analyze_all_with_ai(combined_text, api_key):
-    """Invia tutto il materiale a Gemini Flash forzando l'output in formato JSON pulito"""
-    url = "https://googleapis.com"
-    params = {"key": api_key}
+    """Invia il materiale a Gemini Flash gestendo gli errori di risposta in modo sicuro"""
+    # Utilizzo dell'endpoint V1 standard
+    url = f"https://googleapis.com{api_key}"
     
     prompt = f"""
     Sei un analista B2B esperto nel settore farmaceutico in Europa. Analizza il seguente testo proveniente da ricerche sul Web e bandi pubblici europei (TED).
@@ -69,7 +69,7 @@ def analyze_all_with_ai(combined_text, api_key):
     Testo da analizzare:
     {combined_text}
     
-    Restituisci una lista in formato JSON con la seguente struttura. Se non trovi lead validi, restituisci una lista vuota [].
+    Rispondi fornendo unicamente un array JSON con la struttura qui sotto. Se non trovi nulla restituisci []. Non aggiungere introduzioni.
     [
       {{
         "Canale": "Web" o "Bando TED",
@@ -81,37 +81,39 @@ def analyze_all_with_ai(combined_text, api_key):
     ]
     """
     
-    # Configuriamo la richiesta forzando Gemini a rispondere in JSON nativo
     payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "responseMimeType": "application/json"
-        }
+        "contents": [{"parts": [{"text": prompt}]}]
     }
     
     try:
-        res = requests.post(url, params=params, json=payload, timeout=20)
+        res = requests.post(url, json=payload, timeout=25)
+        
+        # Se la risposta dell'API fallisce (es. 400 o 403), stampiamo l'errore chiaro
+        if res.status_code != 200:
+            print(f"Errore API Gemini (Stato {res.status_code}): {res.text}")
+            return pd.DataFrame()
+            
         res_json = res.json()
         
-        # Estraiamo il testo della risposta
-        text_response = res_json['candidates'][0]['content']['parts'][0]['text']
+        # Navigazione sicura nei nodi dell'oggetto di risposta di Google
+        if 'candidates' in res_json and len(res_json['candidates']) > 0:
+            text_response = res_json['candidates'][0]['content']['parts'][0]['text']
+        else:
+            print("Gemini ha risposto ma la struttura dei dati non contiene testo valido.")
+            return pd.DataFrame()
         
-        # Pulizia di sicurezza avanzata con espressioni regolari per estrarre solo il blocco [ ... ]
+        # Estrazione chirurgica del testo JSON racchiuso tra parentesi quadre
         match = re.search(r'\[.*\]', text_response, re.DOTALL)
         if match:
             clean_json = match.group(0)
         else:
             clean_json = text_response.strip()
             
-        # Carica il JSON in un dizionario Python prima di passarlo a Pandas
         data_dicts = json.loads(clean_json)
         return pd.DataFrame(data_dicts)
         
     except Exception as e:
-        print(f"Errore analisi AI: {e}")
-        # Se c'è un errore mostriamo anche cosa aveva risposto Gemini per debug
-        if 'res_json' in locals():
-            print(f"Risposta grezza parziale: {str(res_json)[:200]}")
+        print(f"Errore durante l'elaborazione dei dati dell'AI: {e}")
         return pd.DataFrame()
 
 def send_email_with_excel(file_path, to_email, from_email, app_password):
@@ -160,7 +162,7 @@ if __name__ == "__main__":
     print("Analisi in corso con l'AI...")
     df_leads = analyze_all_with_ai(raw_data_compiled, GEMINI_API_KEY)
     
-    if not df_leads.empty:
+    if df_leads is not None and not df_leads.empty:
         df_leads = df_leads.drop_duplicates(subset=['Azienda_O_Ente'])
         file_name = "Report_Settimanale_Lead_Totale.xlsx"
         df_leads.to_excel(file_name, index=False)
