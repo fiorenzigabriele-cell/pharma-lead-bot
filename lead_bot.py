@@ -2,6 +2,7 @@ import os
 import smtplib
 import json
 import requests
+import re
 from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -23,7 +24,7 @@ def search_web_free(query):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     try:
         response = requests.get(url, headers=headers, timeout=10)
-        return response.text[:4000] # Taglio per evitare di superare i limiti di contesto gratuiti
+        return response.text[:4000] 
     except Exception:
         return ""
 
@@ -55,7 +56,7 @@ def search_ted_tenders():
         return ""
 
 def analyze_all_with_ai(combined_text, api_key):
-    """Invia tutto il materiale a Gemini Flash per estrarre e filtrare i lead industriali"""
+    """Invia tutto il materiale a Gemini Flash forzando l'output in formato JSON pulito"""
     url = "https://googleapis.com"
     params = {"key": api_key}
     
@@ -68,26 +69,49 @@ def analyze_all_with_ai(combined_text, api_key):
     Testo da analizzare:
     {combined_text}
     
-    Rispondi ESCLUSIVAMENTE in formato JSON con la seguente struttura di lista. Se non trovi lead validi, restituisci un array vuoto []. Non aggiungere altro testo prima o dopo il JSON.
+    Restituisci una lista in formato JSON con la seguente struttura. Se non trovi lead validi, restituisci una lista vuota [].
     [
       {{
         "Canale": "Web" o "Bando TED",
-        "Azienda_O_Ente": "Nome dell'azienda farmaceutica o dell'acquirente pubblico",
+        "Azienda_O_Ente": "Nome dell'azienda o ente",
         "Paese": "Nazione Europea",
-        "Opportunita_Rilevata": "Spiega chiaramente perché è un lead (es. Espansione stabilimento siringhe sterili, Adeguamento Annex 1, bando per macchinari)",
-        "Dettaglio_Fonte": "Contesto o snippet estratto che prova l'opportunità"
+        "Opportunita_Rilevata": "Spiegazione del motivo",
+        "Dettaglio_Fonte": "Contesto trovato"
       }}
     ]
     """
     
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    # Configuriamo la richiesta forzando Gemini a rispondere in JSON nativo
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json"
+        }
+    }
+    
     try:
         res = requests.post(url, params=params, json=payload, timeout=20)
-        text_response = res.json()['candidates']['content']['parts']['text']
-        clean_json = text_response.replace("```json", "").replace("```", "").strip()
-        return pd.read_json(clean_json)
+        res_json = res.json()
+        
+        # Estraiamo il testo della risposta
+        text_response = res_json['candidates'][0]['content']['parts'][0]['text']
+        
+        # Pulizia di sicurezza avanzata con espressioni regolari per estrarre solo il blocco [ ... ]
+        match = re.search(r'\[.*\]', text_response, re.DOTALL)
+        if match:
+            clean_json = match.group(0)
+        else:
+            clean_json = text_response.strip()
+            
+        # Carica il JSON in un dizionario Python prima di passarlo a Pandas
+        data_dicts = json.loads(clean_json)
+        return pd.DataFrame(data_dicts)
+        
     except Exception as e:
         print(f"Errore analisi AI: {e}")
+        # Se c'è un errore mostriamo anche cosa aveva risposto Gemini per debug
+        if 'res_json' in locals():
+            print(f"Risposta grezza parziale: {str(res_json)[:200]}")
         return pd.DataFrame()
 
 def send_email_with_excel(file_path, to_email, from_email, app_password):
