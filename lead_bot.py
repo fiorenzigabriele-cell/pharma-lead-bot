@@ -58,9 +58,8 @@ def search_ted_tenders():
         return ""
 
 def analyze_all_with_ai(combined_text, api_key):
-    """Invia il materiale a Gemini Flash usando l'SDK nativo ufficiale di Google"""
+    """Invia il materiale a Gemini Flash usando il corretto identificatore di modello"""
     try:
-        # Inizializzazione ufficiale del client di Google
         client = genai.Client(api_key=api_key)
         
         prompt = f"""
@@ -84,9 +83,9 @@ def analyze_all_with_ai(combined_text, api_key):
         ]
         """
         
-        # Chiamata nativa sicura configurata per richiedere JSON puro
+        # CORREZIONE: Aggiunto il prefisso 'google/' richiesto dall'API v1beta dell'SDK
         response = client.models.generate_content(
-            model='gemini-1.5-flash',
+            model='google/gemini-1.5-flash',
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json"
