@@ -2,18 +2,18 @@ name: Run Weekly Lead Generation Bot
 
 on:
   schedule:
-    - cron: '0 22 * * 0' # Esegue in automatico ogni domenica alle 22:00 UTC
-  workflow_dispatch: # Ti permette di avviarlo anche a mano con un click quando vuoi
+    - cron: '0 22 * * 0' # Ogni domenica alle 22:00 UTC
+  workflow_dispatch: # Avvio manuale
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.10'
 
