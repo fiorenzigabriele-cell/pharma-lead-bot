@@ -12,16 +12,23 @@ import pandas as pd
 from google import genai
 from google.genai import types
 
-# --- CONFIGURAZIONE ---
+# --- CONFIGURATION (NEW INSTALLATIONS + OPEN PROJECTS) ---
 WEB_QUERIES = [
+    # 1. New installations and expansions
     '"visual inspection" AND "CCIT" pharma Europe news',
-    '"sterile filling line" investment pharmaceutical Europe',
     'CDMO "parenteral" expansion Europe "Annex 1"',
-    '"HVLD" OR "vacuum decay" pharmaceutical line Europe'
+    
+    # 2. Open projects, revamping, and maintenance
+    '"visual inspection machine" upgrade OR revamping pharmaceutical Europe',
+    'pharma "inspection line" maintenance tender Europe',
+    
+    # 3. Compliance and safety issues (Hot leads for replacement)
+    '"warning letter" particulate OR "sterility failure" pharmaceutical Europe',
+    '"recalled" vials OR syringes inspection defect Europe'
 ]
 
 def search_web_free(query):
-    """Estrae notizie dal web simulando una ricerca in HTML (Gratis)"""
+    """Extracts news from the web by simulating an HTML search (Free)"""
     url = f"https://duckduckgo.com{query}"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     try:
@@ -31,7 +38,7 @@ def search_web_free(query):
         return ""
 
 def search_ted_tenders():
-    """Interroga l'API pubblica e gratuita del portale TED europeo per gli ultimi 7 giorni"""
+    """Queries the free public European TED API for notices from the last 7 days"""
     seven_days_ago = (datetime.now() - timedelta(days=7)).strftime('%Y%m%d')
     ted_query = f"publication-date >= {seven_days_ago} AND (FT ~ 'visual inspection' OR FT ~ 'CCIT' OR FT ~ 'leak test')"
     
@@ -51,39 +58,43 @@ def search_ted_tenders():
                 title = n.get('title', {}).get('en', 'N/A')
                 summary = n.get('summary', {}).get('en', 'N/A')
                 buyer = n.get('buyer', {}).get('name', {}).get('en', 'N/A')
-                text_summary += f"Bando TED - Acquirente: {buyer} | Titolo: {title} | Dettagli: {summary}\n\n"
+                text_summary += f"TED Tender - Buyer: {buyer} | Title: {title} | Details: {summary}\n\n"
             return text_summary
         return ""
     except Exception:
         return ""
 
 def analyze_all_with_ai(combined_text, api_key):
-    """Invia il materiale a Gemini usando il modello corrente gemini-3.8-flash"""
+    """Sends the aggregated raw data to Gemini using the current gemini-3.8-flash model"""
     try:
         client = genai.Client(api_key=api_key)
         
         prompt = f"""
-        Sei un analista B2B esperto nel settore farmaceutico in Europa. Analizza il seguente testo proveniente da ricerche sul Web e bandi pubblici europei (TED).
-        Identifica aziende farmaceutiche, CDMO o enti pubblici che richiedono o stanno per acquistare macchine di Ispezione Visiva Automatica (AVI) e sistemi di controllo integrità/leak test (CCIT, HVLD, Vacuum Decay).
+        You are an expert B2B market analyst in the pharmaceutical packaging and inspection sector in Europe.
+        Analyze the following text compiled from web searches and public European procurement tenders (TED).
         
-        Scarta lo spam, i rivenditori di componenti usati e i laboratori accademici minori. Concentrati su siti di produzione e linee industriali in Europa.
+        Identify pharmaceutical companies, CDMOs, or public healthcare entities in Europe that match one of these two scenarios:
+        1. NEW INVESTMENT: Installing new sterile/parenteral filling lines that will require Automated Visual Inspection (AVI) and Container Closure Integrity Testing (CCIT) systems.
+        2. OPEN PROJECT / UPGRADE: Operating existing lines that urgently need maintenance, machine upgrades, software revamping, or have faced regulatory compliance issues (e.g., Warning Letters, recalls due to particulate contamination or leakage defects).
+        
+        Discard generic components distributors, used machinery brokers, and minor academic laboratories. Focus strictly on industrial production sites in Europe.
 
-        Testo da analizzare:
+        Raw data to analyze:
         {combined_text}
         
-        Rispondi fornendo unicamente un array JSON con la struttura qui sotto. Se non trovi nulla restituisci []. Non aggiungere introduzioni.
+        Respond ONLY with a valid JSON array matching the structure below. If no leads are found, return an empty array []. Do not include any introductory or concluding text outside the JSON.
         [
           {{
-            "Canale": "Web" o "Bando TED",
-            "Azienda_O_Ente": "Nome dell'azienda o ente",
-            "Paese": "Nazione Europea",
-            "Opportunita_Rilevata": "Spiegazione del motivo",
-            "Dettaglio_Fonte": "Contesto trovato"
+            "Source_Channel": "Web Search" or "TED Tender",
+            "Company_Or_Entity": "Name of the pharma company, CDMO, or public buyer",
+            "Country": "European Country",
+            "Project_Type": "New Investment" or "Open Project / Revamping",
+            "Detected_Opportunity": "Detailed explanation of why this is a valid commercial lead",
+            "Source_Context": "Specific snippet or context extracted from the source that proves the lead"
           }}
         ]
         """
         
-        # AGGIORNATO: Impostato il modello gemini-3.8-flash richiesto esplicitamente dal server di Google
         response = client.models.generate_content(
             model='gemini-3.8-flash',
             contents=prompt,
@@ -104,17 +115,24 @@ def analyze_all_with_ai(combined_text, api_key):
         return pd.DataFrame(data_dicts)
         
     except Exception as e:
-        print(f"Errore durante l'elaborazione nativa dell'AI: {e}")
+        print(f"Error during AI processing: {e}")
         return pd.DataFrame()
 
 def send_email_with_excel(file_path, to_email, from_email, app_password):
-    """Invia il file Excel generato via email usando il server SMTP di Gmail"""
+    """Sends the generated Excel report via email using Gmail SMTP server"""
     msg = MIMEMultipart()
     msg['From'] = from_email
     msg['To'] = to_email
-    msg['Subject'] = f"🎯 AI REPORT: Lead Ispezione Visiva & CCIT Europa ({datetime.now().strftime('%d-%m-%Y')})"
+    msg['Subject'] = f"🎯 AI MARKET INTELLIGENCE: Weekly Lead Report - AVI & CCIT Europe ({datetime.now().strftime('%d-%m-%Y')})"
     
-    body = "In allegato trovi il report Excel settimanale aggiornato. L'AI ha scansionato il Web e i bandi pubblici europei (TED) filtrando le migliori opportunità."
+    body = (
+        "Dear Team,\n\n"
+        "Please find attached the weekly automated market intelligence report. "
+        "The AI agent has scanned public European tenders (TED) and industry web news, "
+        "filtering and qualifying commercial opportunities for Visual Inspection and CCIT systems.\n\n"
+        "Best regards,\n"
+        "Automated Lead Generation Agent"
+    )
     msg.attach(MIMEText(body, 'plain'))
     
     with open(file_path, "rb") as attachment:
@@ -130,9 +148,9 @@ def send_email_with_excel(file_path, to_email, from_email, app_password):
         server.login(from_email, app_password)
         server.sendmail(from_email, to_email, msg.as_string())
         server.quit()
-        print("Email inviata con successo!")
+        print("Report email sent successfully!")
     except Exception as e:
-        print(f"Errore invio email: {e}")
+        print(f"Error sending email: {e}")
 
 if __name__ == "__main__":
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
@@ -142,21 +160,21 @@ if __name__ == "__main__":
     
     raw_data_compiled = ""
     
-    print("Scansione bandi di gara TED...")
+    print("Scanning TED procurement tenders...")
     ted_results = search_ted_tenders()
-    raw_data_compiled += "--- RISULTATI APPALTI PUBBLICI TED EUROPEA ---\n" + ted_results + "\n"
+    raw_data_compiled += "--- EUROPEAN TED PROCUREMENT TENDERS ---\n" + ted_results + "\n"
     
-    print("Scansione web generalista...")
+    print("Scanning industry web news...")
     for q in WEB_QUERIES:
-        raw_data_compiled += f"--- RISULTATI WEB PER QUERY: {q} ---\n" + search_web_free(q) + "\n"
+        raw_data_compiled += f"--- WEB RESULTS FOR QUERY: {q} ---\n" + search_web_free(q) + "\n"
         
-    print("Analisi in corso con l'AI...")
+    print("Processing data with AI...")
     df_leads = analyze_all_with_ai(raw_data_compiled, GEMINI_API_KEY)
     
     if df_leads is not None and not df_leads.empty:
-        df_leads = df_leads.drop_duplicates(subset=['Azienda_O_Ente'])
-        file_name = "Report_Settimanale_Lead_Totale.xlsx"
+        df_leads = df_leads.drop_duplicates(subset=['Company_Or_Entity'])
+        file_name = "Weekly_Pharma_Leads_Report.xlsx"
         df_leads.to_excel(file_name, index=False)
         send_email_with_excel(file_name, RECEIVER_EMAIL, EMAIL_USER, EMAIL_PASS)
     else:
-        print("Nessun lead rilevante trovato questa settimana. Nessuna email inviata.")
+        print("No relevant leads identified this week. No email sent.")
