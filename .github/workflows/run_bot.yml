@@ -19,7 +19,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        pip install requests pandas openpyxl google-genai
+        pip install requests pandas openpyxl google-genai duckduckgo-search feedparser
 
     - name: Run script
       env:
