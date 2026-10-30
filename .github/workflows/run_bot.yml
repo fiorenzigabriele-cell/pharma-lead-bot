@@ -1,0 +1,30 @@
+name: Run Weekly Lead Generation Bot
+
+on:
+  schedule:
+    - cron: '0 22 * * 0' # Esegue in automatico ogni domenica alle 22:00 UTC
+  workflow_dispatch: # Ti permette di avviarlo anche a mano con un click quando vuoi
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        pip install requests pandas openpyxl
+
+    - name: Run script
+      env:
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        EMAIL_USER: ${{ secrets.EMAIL_USER }}
+        EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+        RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+      run: python lead_bot.py
