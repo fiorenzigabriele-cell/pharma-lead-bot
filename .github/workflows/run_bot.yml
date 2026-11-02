@@ -2,8 +2,8 @@ name: Run Weekly Lead Generation Bot
 
 on:
   schedule:
-    - cron: '0 22 * * 0' # Ogni domenica alle 22:00 UTC
-  workflow_dispatch: # Avvio manuale
+    - cron: '0 22 * * 0'
+  workflow_dispatch:
 
 jobs:
   run-bot:
@@ -26,6 +26,6 @@ jobs:
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         EMAIL_USER: ${{ secrets.EMAIL_USER }}
         EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
-        RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }} 
+        RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
         SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
       run: python lead_bot.py
