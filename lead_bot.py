@@ -3,7 +3,7 @@ import smtplib
 import json
 import requests
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
@@ -11,7 +11,6 @@ from email import encoders
 import pandas as pd
 from google import genai
 from google.genai import types
-from ddgs import DDGS
 import feedparser
 
 # ============================================================
@@ -56,24 +55,55 @@ GOOGLE_NEWS_QUERIES = [
 ]
 
 
-def search_web(query: str, max_results: int = 8) -> str:
+def search_serper(query: str, max_results: int = 10) -> str:
+    """Search using Serper (Google Search API)"""
+    api_key = os.getenv("SERPER_API_KEY", "").strip()
+    if not api_key:
+        print("    → SERPER_API_KEY non impostata")
+        return ""
+
     try:
+        url = "https://google.serper.dev/search"
+        headers = {
+            "X-API-KEY": api_key,
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "q": query,
+            "num": max_results,
+            "gl": "eu",
+            "hl": "en"
+        }
+        response = requests.post(url, headers=headers, json=payload, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+
         results = []
-        with DDGS() as ddgs:
-            for r in ddgs.text(query, max_results=max_results, region="wt-wt"):
-                title = r.get("title", "")
-                body = r.get("body", "")
-                href = r.get("href", "")
-                results.append(f"Title: {title}\nURL: {href}\nSnippet: {body}")
+        # Organic results
+        for item in data.get("organic", [])[:max_results]:
+            title = item.get("title", "")
+            link = item.get("link", "")
+            snippet = item.get("snippet", "")
+            results.append(f"Title: {title}\nURL: {link}\nSnippet: {snippet}")
+
+        # News results if present
+        for item in data.get("news", [])[:5]:
+            title = item.get("title", "")
+            link = item.get("link", "")
+            snippet = item.get("snippet", "")
+            date = item.get("date", "")
+            results.append(f"Title: {title}\nDate: {date}\nURL: {link}\nSnippet: {snippet}")
+
         text = "\n\n---\n\n".join(results)
-        print(f"    → DuckDuckGo: {len(results)} risultati ({len(text)} caratteri)")
+        print(f"    → Serper: {len(results)} risultati ({len(text)} caratteri)")
         return text
     except Exception as e:
-        print(f"    → Search error for '{query[:60]}...': {e}")
+        print(f"    → Serper error for '{query[:50]}...': {e}")
         return ""
 
 
-def search_google_news(query: str, max_entries: int = 10) -> str:
+def search_google_news(query: str, max_entries: int = 8) -> str:
+    """Free Google News RSS (backup)"""
     try:
         url = f"https://news.google.com/rss/search?q={requests.utils.quote(query)}&hl=en&gl=EU&ceid=EU:en"
         feed = feedparser.parse(url)
@@ -88,20 +118,8 @@ def search_google_news(query: str, max_entries: int = 10) -> str:
         print(f"    → Google News: {len(results)} articoli ({len(text)} caratteri)")
         return text
     except Exception as e:
-        print(f"    → Google News error for '{query[:50]}...': {e}")
+        print(f"    → Google News error: {e}")
         return ""
-
-
-def search_ted_tenders() -> str:
-    queries = [
-        '"visual inspection" OR AVI pharmaceutical site:ted.europa.eu',
-        'CCIT OR "leak test" OR "container closure" pharmaceutical tender Europe',
-        '"inspection machine" OR AVI pharmaceutical tender Europe',
-    ]
-    results = []
-    for q in queries:
-        results.append(search_web(q, max_results=6))
-    return "\n\n".join(results)
 
 
 def analyze_leads_with_ai(combined_text: str, api_key: str) -> pd.DataFrame:
@@ -110,37 +128,37 @@ def analyze_leads_with_ai(combined_text: str, api_key: str) -> pd.DataFrame:
         prompt = f"""
 You are a senior B2B sales intelligence analyst specialized in pharmaceutical Visual Inspection (AVI) and Container Closure Integrity Testing (CCIT) equipment in Europe.
 
-Analyze the following raw text from web searches, Google News and public tenders.
+Analyze the following raw text from web searches and news.
 
 Extract commercial opportunities for selling Automated Visual Inspection machines and/or CCIT systems.
-Be pragmatic: include also early signals and medium-quality opportunities (not only "hot" deals).
+Be pragmatic: include also early signals and medium-quality opportunities.
 
 Focus on:
-1. NEW INVESTMENTS: companies or CDMOs installing new sterile/parenteral lines
-2. UPGRADES / REVAMPING: companies needing to replace or upgrade existing inspection equipment
-3. REGULATORY PRESSURE: companies with quality issues, recalls, warning letters related to particles, leaks, sterility
-4. CAPACITY EXPANSIONS or new facilities in Europe that will need inspection equipment
+1. NEW INVESTMENTS / new sterile or parenteral lines
+2. UPGRADES / REVAMPING of inspection equipment
+3. REGULATORY / QUALITY issues (recalls, warning letters, particulate, leak, sterility)
+4. CAPACITY EXPANSIONS in Europe
 
-Ignore: pure distributors of used equipment, pure academic papers, non-European companies (unless clear European project).
+Ignore pure distributors of used equipment and pure academic content.
 
-Return ONLY a valid JSON array. No other text.
+Return ONLY a valid JSON array:
 [
   {{
-    "Source_Channel": "Web Search" or "Google News" or "TED Tender",
+    "Source_Channel": "Web Search" or "News",
     "Company_Or_Entity": "Name",
     "Country": "Country",
     "Project_Type": "New Investment" or "Upgrade/Revamping" or "Regulatory/Quality Signal" or "Capacity Expansion",
     "Priority": "Hot" or "Warm" or "Early Signal",
-    "Detected_Opportunity": "Clear explanation why this is a sales opportunity for Visual Inspection / CCIT",
-    "Suggested_Action": "Concrete next step for a sales person",
-    "Source_Context": "Short evidence snippet"
+    "Detected_Opportunity": "Clear explanation",
+    "Suggested_Action": "Concrete next step",
+    "Source_Context": "Short evidence"
   }}
 ]
 
-If truly nothing relevant is found, return an empty array [].
+If nothing relevant, return [].
 
 Raw data:
-{combined_text[:30000]}
+{combined_text[:32000]}
 """
         response = client.models.generate_content(
             model="gemini-3.8-flash",
@@ -163,33 +181,33 @@ def analyze_competitors_with_ai(competitor_data: dict, api_key: str) -> pd.DataF
         all_text = ""
         for name, texts in competitor_data.items():
             all_text += f"\n\n===== {name} =====\n" + "\n".join(texts)
+
         prompt = f"""
 You are a competitive intelligence analyst for Syntegon (pharmaceutical Visual Inspection & CCIT equipment).
 
-Analyze the following recent public information about these three competitors:
+Analyze recent public information about:
 - Körber (including Seidenader)
 - Stevanato Group
 - Brevetti CEA
 
-Extract actionable intelligence. Prefer recent news (installations, new contracts, product launches, partnerships, messaging changes).
-Include also weaker signals if they have strategic value.
+Extract actionable intelligence (new contracts, installations, product launches, partnerships, messaging).
 
 Return ONLY a valid JSON array:
 [
   {{
     "Competitor": "Körber" or "Stevanato" or "Brevetti",
     "Type": "Product Launch" or "New Contract/Installation" or "Partnership" or "Messaging/Positioning" or "Weakness/Limitation" or "Other",
-    "Summary": "Clear summary of the finding",
-    "Implication_for_Syntegon": "What this means for Syntegon sales strategy",
-    "Suggested_Response": "What Syntegon sales should do or say",
+    "Summary": "Clear summary",
+    "Implication_for_Syntegon": "What this means for Syntegon",
+    "Suggested_Response": "What sales should do",
     "Source_Context": "Short evidence"
   }}
 ]
 
-If nothing relevant is found, return an empty array []. Do not invent information.
+If nothing relevant, return [].
 
 Raw data:
-{all_text[:30000]}
+{all_text[:32000]}
 """
         response = client.models.generate_content(
             model="gemini-3.8-flash",
@@ -215,8 +233,8 @@ def send_email_with_excel(file_path: str, to_email: str, from_email: str, app_pa
         "Ciao,\n\n"
         "In allegato il report settimanale di market & competitive intelligence.\n\n"
         "Contiene due fogli:\n"
-        "1. Leads → opportunità commerciali (Visual Inspection & CCIT) in Europa\n"
-        "2. Competitor Intelligence → movimenti di Körber, Stevanato e Brevetti\n\n"
+        "1. Leads\n"
+        "2. Competitor Intelligence\n\n"
         "Buon lavoro,\n"
         "Pharma Lead Bot"
     )
@@ -243,25 +261,29 @@ if __name__ == "__main__":
     EMAIL_USER = os.getenv("EMAIL_USER", "").strip()
     EMAIL_PASS = os.getenv("EMAIL_PASS", "").strip()
     RECEIVER_EMAIL = os.getenv("RECEIVER_EMAIL", "").strip()
+    SERPER_API_KEY = os.getenv("SERPER_API_KEY", "").strip()
 
     if not GEMINI_API_KEY:
         print("ERRORE: GEMINI_API_KEY non impostata.")
         exit(1)
+    if not SERPER_API_KEY:
+        print("ERRORE: SERPER_API_KEY non impostata. Aggiungila come secret su GitHub.")
+        exit(1)
 
-    print("=== FASE 1: Ricerca Lead ===")
-    raw_leads = "--- TED / PUBLIC TENDERS ---\n" + search_ted_tenders() + "\n\n"
+    print("=== FASE 1: Ricerca Lead (Serper + Google News) ===")
+    raw_leads = ""
 
-    print("\n--- Web Search (DuckDuckGo) ---")
+    print("\n--- Serper Search ---")
     for q in LEAD_QUERIES:
-        print(f"  Query: {q[:80]}...")
-        raw_leads += f"--- QUERY: {q} ---\n{search_web(q)}\n\n"
+        print(f"  Query: {q[:75]}...")
+        raw_leads += f"--- QUERY: {q} ---\n{search_serper(q)}\n\n"
 
-    print("\n--- Google News RSS ---")
+    print("\n--- Google News (backup) ---")
     for q in GOOGLE_NEWS_QUERIES:
         print(f"  News: {q[:70]}...")
         raw_leads += f"--- GOOGLE NEWS: {q} ---\n{search_google_news(q)}\n\n"
 
-    print(f"\nTotale testo raccolto per lead: {len(raw_leads)} caratteri")
+    print(f"\nTotale testo raccolto: {len(raw_leads)} caratteri")
     print("Analisi lead con AI...")
     df_leads = analyze_leads_with_ai(raw_leads, GEMINI_API_KEY)
 
@@ -271,9 +293,8 @@ if __name__ == "__main__":
         print(f"  Analizzo {competitor}...")
         texts = []
         for q in queries:
-            texts.append(search_web(q))
-        news_q = f"{competitor} inspection OR AVI OR pharmaceutical"
-        texts.append(search_google_news(news_q))
+            texts.append(search_serper(q))
+        texts.append(search_google_news(f"{competitor} inspection OR AVI OR pharmaceutical"))
         competitor_raw[competitor] = texts
 
     df_competitors = analyze_competitors_with_ai(competitor_raw, GEMINI_API_KEY)
@@ -304,4 +325,3 @@ if __name__ == "__main__":
         send_email_with_excel(file_name, RECEIVER_EMAIL, EMAIL_USER, EMAIL_PASS)
     else:
         print(f"Report salvato localmente: {file_name}")
-        print("Configura EMAIL_USER, EMAIL_PASS e RECEIVER_EMAIL per l'invio automatico.")
