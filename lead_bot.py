@@ -11,7 +11,7 @@ from email import encoders
 import pandas as pd
 from google import genai
 from google.genai import types
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 import feedparser
 
 # ============================================================
@@ -65,7 +65,7 @@ GOOGLE_NEWS_QUERIES = [
 
 
 def search_web(query: str, max_results: int = 8) -> str:
-    """Improved free web search using duckduckgo-search library"""
+    """Improved free web search using ddgs library"""
     try:
         results = []
         with DDGS() as ddgs:
@@ -160,7 +160,7 @@ Raw data:
 """
 
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-3.8-flash",
             contents=prompt,
             config=types.GenerateContentConfig(response_mime_type="application/json"),
         )
@@ -215,7 +215,7 @@ Raw data:
 """
 
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-3.8-flash",
             contents=prompt,
             config=types.GenerateContentConfig(response_mime_type="application/json"),
         )
@@ -331,16 +331,4 @@ if __name__ == "__main__":
             print("Nessun lead trovato.")
 
         if df_competitors is not None and not df_competitors.empty:
-            df_competitors.to_excel(writer, sheet_name="Competitor_Intelligence", index=False)
-            print(f"Insight competitor: {len(df_competitors)}")
-        else:
-            pd.DataFrame({"Info": ["Nessun movimento competitor rilevante"]}).to_excel(
-                writer, sheet_name="Competitor_Intelligence", index=False
-            )
-            print("Nessun insight competitor.")
-
-    if EMAIL_USER and EMAIL_PASS and RECEIVER_EMAIL:
-        send_email_with_excel(file_name, RECEIVER_EMAIL, EMAIL_USER, EMAIL_PASS)
-    else:
-        print(f"Report salvato localmente: {file_name}")
-        print("Configura EMAIL_USER, EMAIL_PASS e RECEIVER_EMAIL per l'invio automatico.")
+            df_competitors.to_excel(writer
