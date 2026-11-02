@@ -5,6 +5,9 @@ on:
     - cron: '0 22 * * 0'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   run-bot:
     runs-on: ubuntu-latest
@@ -29,3 +32,27 @@ jobs:
         RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
         SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
       run: python lead_bot.py
+
+    - name: Save report as artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: intelligence-report
+        path: |
+          Syntegon_Intelligence_Report_*.xlsx
+          leads_master.xlsx
+        if-no-files-found: warn
+
+    - name: Commit leads history
+      if: always()
+      run: |
+        git config user.name "pharma-lead-bot"
+        git config user.email "bot@users.noreply.github.com"
+        git add leads_master.xlsx 2>/dev/null || true
+        if git diff --cached --quiet; then
+          echo "Nessuna modifica allo storico"
+        else
+          git commit -m "Update leads history"
+          git pull --rebase
+          git push
+        fi
