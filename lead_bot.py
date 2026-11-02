@@ -18,24 +18,17 @@ import feedparser
 # CONFIGURATION
 # ============================================================
 
-# Lead generation queries (Europe - aggressive)
 LEAD_QUERIES = [
-    # New investments & expansions
     '"visual inspection" OR AVI OR "automated visual inspection" (CDMO OR pharma) (expansion OR "new line" OR investment) Europe',
     'CDMO parenteral OR injectable (expansion OR "new facility" OR "new line") (Europe OR Germany OR France OR Italy OR Spain OR Switzerland)',
     '"filling line" (vial OR syringe OR ampoule) (inspection OR AVI OR CCIT) Europe',
-
-    # Upgrades / revamping / problems
     '"visual inspection machine" (upgrade OR revamping OR replacement OR retrofit) pharmaceutical Europe',
     '("false reject" OR "high reject rate") (visual inspection OR AVI) pharma Europe',
     '"Annex 1" (visual inspection OR CCIT OR "leak test") (compliance OR upgrade) Europe',
-
-    # Regulatory / quality signals
     '"warning letter" OR recall (particulate OR "container closure" OR leak OR sterility) pharmaceutical Europe',
     '"sterility failure" OR "particulate contamination" (vial OR syringe) Europe',
 ]
 
-# Competitor intelligence queries
 COMPETITOR_QUERIES = {
     "Körber": [
         'Körber (inspection OR AVI OR "visual inspection" OR CCIT OR "leak detection") (pharma OR pharmaceutical)',
@@ -54,7 +47,6 @@ COMPETITOR_QUERIES = {
     ],
 }
 
-# Google News RSS queries (free, high quality for recent news)
 GOOGLE_NEWS_QUERIES = [
     "visual inspection pharmaceutical OR AVI OR CCIT Europe",
     "CDMO expansion OR investment parenteral OR injectable Europe",
@@ -65,7 +57,6 @@ GOOGLE_NEWS_QUERIES = [
 
 
 def search_web(query: str, max_results: int = 8) -> str:
-    """Improved free web search using ddgs library"""
     try:
         results = []
         with DDGS() as ddgs:
@@ -74,7 +65,6 @@ def search_web(query: str, max_results: int = 8) -> str:
                 body = r.get("body", "")
                 href = r.get("href", "")
                 results.append(f"Title: {title}\nURL: {href}\nSnippet: {body}")
-
         text = "\n\n---\n\n".join(results)
         print(f"    → DuckDuckGo: {len(results)} risultati ({len(text)} caratteri)")
         return text
@@ -84,11 +74,9 @@ def search_web(query: str, max_results: int = 8) -> str:
 
 
 def search_google_news(query: str, max_entries: int = 10) -> str:
-    """Free Google News RSS feed"""
     try:
         url = f"https://news.google.com/rss/search?q={requests.utils.quote(query)}&hl=en&gl=EU&ceid=EU:en"
         feed = feedparser.parse(url)
-
         results = []
         for entry in feed.entries[:max_entries]:
             title = entry.get("title", "")
@@ -96,7 +84,6 @@ def search_google_news(query: str, max_entries: int = 10) -> str:
             published = entry.get("published", "")
             summary = entry.get("summary", "")[:300]
             results.append(f"Title: {title}\nDate: {published}\nURL: {link}\nSummary: {summary}")
-
         text = "\n\n---\n\n".join(results)
         print(f"    → Google News: {len(results)} articoli ({len(text)} caratteri)")
         return text
@@ -106,7 +93,6 @@ def search_google_news(query: str, max_entries: int = 10) -> str:
 
 
 def search_ted_tenders() -> str:
-    """Search recent TED tenders related to inspection"""
     queries = [
         '"visual inspection" OR AVI pharmaceutical site:ted.europa.eu',
         'CCIT OR "leak test" OR "container closure" pharmaceutical tender Europe',
@@ -119,10 +105,8 @@ def search_ted_tenders() -> str:
 
 
 def analyze_leads_with_ai(combined_text: str, api_key: str) -> pd.DataFrame:
-    """Extract commercial leads from raw text"""
     try:
         client = genai.Client(api_key=api_key)
-
         prompt = f"""
 You are a senior B2B sales intelligence analyst specialized in pharmaceutical Visual Inspection (AVI) and Container Closure Integrity Testing (CCIT) equipment in Europe.
 
@@ -158,33 +142,27 @@ If truly nothing relevant is found, return an empty array [].
 Raw data:
 {combined_text[:30000]}
 """
-
         response = client.models.generate_content(
             model="gemini-3.8-flash",
             contents=prompt,
             config=types.GenerateContentConfig(response_mime_type="application/json"),
         )
-
         text_response = response.text
         match = re.search(r"\[.*\]", text_response, re.DOTALL)
         clean_json = match.group(0) if match else text_response.strip()
         data = json.loads(clean_json)
         return pd.DataFrame(data)
-
     except Exception as e:
         print(f"Error in lead analysis: {e}")
         return pd.DataFrame()
 
 
 def analyze_competitors_with_ai(competitor_data: dict, api_key: str) -> pd.DataFrame:
-    """Analyze competitor movements"""
     try:
         client = genai.Client(api_key=api_key)
-
         all_text = ""
         for name, texts in competitor_data.items():
             all_text += f"\n\n===== {name} =====\n" + "\n".join(texts)
-
         prompt = f"""
 You are a competitive intelligence analyst for Syntegon (pharmaceutical Visual Inspection & CCIT equipment).
 
@@ -213,31 +191,26 @@ If nothing relevant is found, return an empty array []. Do not invent informatio
 Raw data:
 {all_text[:30000]}
 """
-
         response = client.models.generate_content(
             model="gemini-3.8-flash",
             contents=prompt,
             config=types.GenerateContentConfig(response_mime_type="application/json"),
         )
-
         text_response = response.text
         match = re.search(r"\[.*\]", text_response, re.DOTALL)
         clean_json = match.group(0) if match else text_response.strip()
         data = json.loads(clean_json)
         return pd.DataFrame(data)
-
     except Exception as e:
         print(f"Error in competitor analysis: {e}")
         return pd.DataFrame()
 
 
 def send_email_with_excel(file_path: str, to_email: str, from_email: str, app_password: str):
-    """Send the Excel report via Gmail"""
     msg = MIMEMultipart()
     msg["From"] = from_email
     msg["To"] = to_email
     msg["Subject"] = f"Syntegon Intelligence Report – Leads + Competitors ({datetime.now().strftime('%d-%m-%Y')})"
-
     body = (
         "Ciao,\n\n"
         "In allegato il report settimanale di market & competitive intelligence.\n\n"
@@ -248,14 +221,12 @@ def send_email_with_excel(file_path: str, to_email: str, from_email: str, app_pa
         "Pharma Lead Bot"
     )
     msg.attach(MIMEText(body, "plain"))
-
     with open(file_path, "rb") as attachment:
         part = MIMEBase("application", "octet-stream")
         part.set_payload(attachment.read())
         encoders.encode_base64(part)
         part.add_header("Content-Disposition", f"attachment; filename= {os.path.basename(file_path)}")
         msg.attach(part)
-
     try:
         server = smtplib.SMTP("smtp.gmail.com", 587)
         server.starttls()
@@ -277,9 +248,6 @@ if __name__ == "__main__":
         print("ERRORE: GEMINI_API_KEY non impostata.")
         exit(1)
 
-    # ---------------------------------------------------------
-    # 1. LEAD GENERATION
-    # ---------------------------------------------------------
     print("=== FASE 1: Ricerca Lead ===")
     raw_leads = "--- TED / PUBLIC TENDERS ---\n" + search_ted_tenders() + "\n\n"
 
@@ -297,9 +265,6 @@ if __name__ == "__main__":
     print("Analisi lead con AI...")
     df_leads = analyze_leads_with_ai(raw_leads, GEMINI_API_KEY)
 
-    # ---------------------------------------------------------
-    # 2. COMPETITOR INTELLIGENCE
-    # ---------------------------------------------------------
     print("\n=== FASE 2: Competitor Intelligence ===")
     competitor_raw = {}
     for competitor, queries in COMPETITOR_QUERIES.items():
@@ -307,16 +272,12 @@ if __name__ == "__main__":
         texts = []
         for q in queries:
             texts.append(search_web(q))
-        # Also add Google News for this competitor
         news_q = f"{competitor} inspection OR AVI OR pharmaceutical"
         texts.append(search_google_news(news_q))
         competitor_raw[competitor] = texts
 
     df_competitors = analyze_competitors_with_ai(competitor_raw, GEMINI_API_KEY)
 
-    # ---------------------------------------------------------
-    # 3. SAVE & SEND
-    # ---------------------------------------------------------
     file_name = f"Syntegon_Intelligence_Report_{datetime.now().strftime('%Y%m%d')}.xlsx"
 
     with pd.ExcelWriter(file_name, engine="openpyxl") as writer:
@@ -331,4 +292,16 @@ if __name__ == "__main__":
             print("Nessun lead trovato.")
 
         if df_competitors is not None and not df_competitors.empty:
-            df_competitors.to_excel(writer
+            df_competitors.to_excel(writer, sheet_name="Competitor_Intelligence", index=False)
+            print(f"Insight competitor: {len(df_competitors)}")
+        else:
+            pd.DataFrame({"Info": ["Nessun movimento competitor rilevante"]}).to_excel(
+                writer, sheet_name="Competitor_Intelligence", index=False
+            )
+            print("Nessun insight competitor.")
+
+    if EMAIL_USER and EMAIL_PASS and RECEIVER_EMAIL:
+        send_email_with_excel(file_name, RECEIVER_EMAIL, EMAIL_USER, EMAIL_PASS)
+    else:
+        print(f"Report salvato localmente: {file_name}")
+        print("Configura EMAIL_USER, EMAIL_PASS e RECEIVER_EMAIL per l'invio automatico.")
