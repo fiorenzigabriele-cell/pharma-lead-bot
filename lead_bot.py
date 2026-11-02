@@ -13,6 +13,34 @@ from google import genai
 from google.genai import types
 import feedparser
 
+import time
+
+GEMINI_MODELS = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite"]
+
+
+def generate_json(client, prompt: str):
+    """Chiama Gemini con retry (backoff) e modelli di riserva su 429/5xx."""
+    last_err = None
+    for model in GEMINI_MODELS:
+        for attempt in range(1, 5):
+            try:
+                print(f"    → Gemini {model} (tentativo {attempt})")
+                return client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(response_mime_type="application/json"),
+                )
+            except Exception as e:
+                last_err = e
+                msg = str(e)
+                retryable = any(c in msg for c in ("503", "429", "500", "502", "504", "UNAVAILABLE", "RESOURCE_EXHAUSTED"))
+                print(f"    → Gemini errore: {msg[:200]}")
+                if not retryable:
+                    raise
+                time.sleep(min(60, 10 * 2 ** (attempt - 1)))
+    raise last_err
+
+
 # ============================================================
 # CONFIGURATION - Query semplificate e stabili
 # ============================================================
@@ -70,11 +98,12 @@ def search_serper(query: str, max_results: int = 10) -> str:
         payload = {
             "q": query,
             "num": max_results,
-            "gl": "eu",
             "hl": "en"
         }
         response = requests.post(url, headers=headers, json=payload, timeout=20)
-        response.raise_for_status()
+        if not response.ok:
+            print(f"    → Serper HTTP {response.status_code}: {response.text[:300]}")
+            return ""
         data = response.json()
 
         results = []
@@ -154,17 +183,15 @@ If nothing relevant, return [].
 Raw data:
 {combined_text[:35000]}
 """
-        response = client.models.generate_content(
-            model="gemini-3.8-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(response_mime_type="application/json"),
-        )
-        text_response = response.text
+        response = generate_json(client, prompt)
+        text_response = response.text or ""
+        print(f"    → Gemini risposta ({len(text_response)} car.): {text_response[:300]!r}")
         match = re.search(r"\[.*\]", text_response, re.DOTALL)
         clean_json = match.group(0) if match else text_response.strip()
         data = json.loads(clean_json)
         return pd.DataFrame(data)
     except Exception as e:
+        import traceback; traceback.print_exc()
         print(f"Error in lead analysis: {e}")
         return pd.DataFrame()
 
@@ -203,17 +230,15 @@ If nothing relevant, return [].
 Raw data:
 {all_text[:35000]}
 """
-        response = client.models.generate_content(
-            model="gemini-3.8-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(response_mime_type="application/json"),
-        )
-        text_response = response.text
+        response = generate_json(client, prompt)
+        text_response = response.text or ""
+        print(f"    → Gemini risposta ({len(text_response)} car.): {text_response[:300]!r}")
         match = re.search(r"\[.*\]", text_response, re.DOTALL)
         clean_json = match.group(0) if match else text_response.strip()
         data = json.loads(clean_json)
         return pd.DataFrame(data)
     except Exception as e:
+        import traceback; traceback.print_exc()
         print(f"Error in competitor analysis: {e}")
         return pd.DataFrame()
 
@@ -278,6 +303,9 @@ if __name__ == "__main__":
         raw_leads += f"--- GOOGLE NEWS: {q} ---\n{search_google_news(q)}\n\n"
 
     print(f"\nTotale testo raccolto: {len(raw_leads)} caratteri")
+    if len(raw_leads) < 2000:
+        print("ERRORE: quasi nessun dato dalle ricerche (Serper/Google News). Controlla i log sopra.")
+        exit(1)
     print("Analisi lead con AI...")
     df_leads = analyze_leads_with_ai(raw_leads, GEMINI_API_KEY)
 
@@ -315,7 +343,13 @@ if __name__ == "__main__":
             )
             print("Nessun insight competitor.")
 
+    both_empty = (df_leads is None or df_leads.empty) and (df_competitors is None or df_competitors.empty)
+
     if EMAIL_USER and EMAIL_PASS and RECEIVER_EMAIL:
         send_email_with_excel(file_name, RECEIVER_EMAIL, EMAIL_USER, EMAIL_PASS)
     else:
         print(f"Report salvato localmente: {file_name}")
+
+    if both_empty:
+        print("ERRORE: analisi AI fallita su lead e competitor (vedi errori sopra).")
+        exit(1)
