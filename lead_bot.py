@@ -14,48 +14,59 @@ from google.genai import types
 import feedparser
 
 # ============================================================
-# CONFIGURATION
+# CONFIGURATION - Query aggressive (2026 + LinkedIn + PDA + Reddit)
 # ============================================================
 
 LEAD_QUERIES = [
-    '"visual inspection" OR AVI OR "automated visual inspection" (CDMO OR pharma) (expansion OR "new line" OR investment) Europe',
-    'CDMO parenteral OR injectable (expansion OR "new facility" OR "new line") (Europe OR Germany OR France OR Italy OR Spain OR Switzerland)',
-    '"filling line" (vial OR syringe OR ampoule) (inspection OR AVI OR CCIT) Europe',
-    '"visual inspection machine" (upgrade OR revamping OR replacement OR retrofit) pharmaceutical Europe',
-    '("false reject" OR "high reject rate") (visual inspection OR AVI) pharma Europe',
-    '"Annex 1" (visual inspection OR CCIT OR "leak test") (compliance OR upgrade) Europe',
-    '"warning letter" OR recall (particulate OR "container closure" OR leak OR sterility) pharmaceutical Europe',
-    '"sterility failure" OR "particulate contamination" (vial OR syringe) Europe',
+    # Investimenti e nuove linee 2026
+    '"visual inspection" OR AVI OR "automated visual inspection" (CDMO OR "contract development") (expansion OR "new line" OR "new facility" OR investment) 2026',
+    'CDMO (parenteral OR injectable OR sterile) ("new filling line" OR "new inspection" OR "new AVI" OR expansion) (Europe OR Germany OR France OR Italy OR Spain OR Switzerland OR Ireland) 2026',
+    '("filling line" OR "inspection line") (vial OR syringe OR ampoule OR cartridge) (AVI OR "visual inspection" OR CCIT) 2026',
+
+    # Upgrade e problemi
+    '"visual inspection" OR AVI (upgrade OR revamping OR replacement OR retrofit OR "false reject") (pharma OR pharmaceutical OR CDMO) 2026',
+    '("Annex 1" OR "Annex1") (visual inspection OR AVI OR CCIT OR "leak test") (upgrade OR compliance OR investment) 2026',
+
+    # Segnali regolatori e qualità
+    '("warning letter" OR recall OR "sterility failure" OR "particulate contamination") (vial OR syringe OR injectable) (Europe OR EMA) 2026',
+
+    # LinkedIn e fonti specifiche
+    'site:linkedin.com ("visual inspection" OR AVI OR "inspection machine") (CDMO OR pharma OR pharmaceutical) 2026',
+    'site:pda.org OR "PDA Journal" OR "PDA Letter" (visual inspection OR AVI OR CCIT OR "container closure") 2026',
+
+    # Reddit e forum
+    'site:reddit.com (visual inspection OR AVI OR "false reject" OR CCIT OR "leak test") (pharma OR CDMO OR injectable)',
 ]
 
 COMPETITOR_QUERIES = {
     "Körber": [
-        'Körber (inspection OR AVI OR "visual inspection" OR CCIT OR "leak detection") (pharma OR pharmaceutical)',
-        'Körber (Seidenader OR Mediseal) (inspection machine OR AVI)',
-        '"Körber" ("visual inspection" OR AVI) (launch OR new OR contract OR installation)',
+        'Körber OR Seidenader (inspection OR AVI OR "visual inspection" OR CCIT) (contract OR installation OR launch OR partnership OR "new machine") 2026',
+        'site:linkedin.com (Körber OR Seidenader) (inspection OR AVI OR "visual inspection") 2026',
+        '"Körber" OR Seidenader ("visual inspection" OR AVI) (pharma OR pharmaceutical) 2026',
     ],
     "Stevanato": [
-        'Stevanato (inspection OR AVI OR "visual inspection" OR CCIT) (pharma OR pharmaceutical)',
-        'Stevanato Group (inspection machine OR "visual inspection" OR AVI)',
-        '"Stevanato" ("visual inspection" OR AVI OR CCIT) (launch OR contract OR installation OR partnership)',
+        'Stevanato (inspection OR AVI OR "visual inspection" OR CCIT OR "leak detection") (contract OR installation OR launch OR partnership) 2026',
+        'site:linkedin.com Stevanato (inspection OR AVI OR "visual inspection" OR CCIT) 2026',
+        '"Stevanato Group" (inspection OR AVI) 2026',
     ],
     "Brevetti": [
-        'Brevetti CEA (inspection OR AVI OR "visual inspection") (pharma OR pharmaceutical)',
-        '"Brevetti CEA" OR "Brevetti" (inspection machine OR AVI OR CCIT)',
-        'Brevetti (visual inspection OR leak test) (installation OR contract OR new)',
+        '"Brevetti CEA" OR "Brevetti" (inspection OR AVI OR "visual inspection" OR CCIT) (contract OR installation OR new OR launch) 2026',
+        'site:linkedin.com ("Brevetti CEA" OR Brevetti) (inspection OR AVI) 2026',
+        '"Brevetti CEA" (pharma OR pharmaceutical OR CDMO) 2026',
     ],
 }
 
 GOOGLE_NEWS_QUERIES = [
-    "visual inspection pharmaceutical OR AVI OR CCIT Europe",
-    "CDMO expansion OR investment parenteral OR injectable Europe",
-    "Körber OR Seidenader inspection OR AVI",
-    "Stevanato inspection OR AVI OR CCIT",
-    "Brevetti CEA inspection OR AVI",
+    "visual inspection OR AVI OR CCIT pharmaceutical OR CDMO 2026",
+    "CDMO expansion OR investment filling line OR inspection 2026",
+    "Körber OR Seidenader inspection OR AVI 2026",
+    "Stevanato inspection OR AVI OR CCIT 2026",
+    "Brevetti CEA inspection OR AVI 2026",
+    "Annex 1 visual inspection OR CCIT upgrade 2026",
 ]
 
 
-def search_serper(query: str, max_results: int = 10) -> str:
+def search_serper(query: str, max_results: int = 12) -> str:
     """Search using Serper (Google Search API)"""
     api_key = os.getenv("SERPER_API_KEY", "").strip()
     if not api_key:
@@ -72,38 +83,36 @@ def search_serper(query: str, max_results: int = 10) -> str:
             "q": query,
             "num": max_results,
             "gl": "eu",
-            "hl": "en"
+            "hl": "en",
+            "tbs": "qdr:y"
         }
-        response = requests.post(url, headers=headers, json=payload, timeout=15)
+        response = requests.post(url, headers=headers, json=payload, timeout=20)
         response.raise_for_status()
         data = response.json()
 
         results = []
-        # Organic results
         for item in data.get("organic", [])[:max_results]:
             title = item.get("title", "")
             link = item.get("link", "")
             snippet = item.get("snippet", "")
             results.append(f"Title: {title}\nURL: {link}\nSnippet: {snippet}")
 
-        # News results if present
-        for item in data.get("news", [])[:5]:
+        for item in data.get("news", [])[:6]:
             title = item.get("title", "")
             link = item.get("link", "")
             snippet = item.get("snippet", "")
             date = item.get("date", "")
-            results.append(f"Title: {title}\nDate: {date}\nURL: {link}\nSnippet: {snippet}")
+            results.append(f"[NEWS] Title: {title}\nDate: {date}\nURL: {link}\nSnippet: {snippet}")
 
         text = "\n\n---\n\n".join(results)
         print(f"    → Serper: {len(results)} risultati ({len(text)} caratteri)")
         return text
     except Exception as e:
-        print(f"    → Serper error for '{query[:50]}...': {e}")
+        print(f"    → Serper error: {e}")
         return ""
 
 
 def search_google_news(query: str, max_entries: int = 8) -> str:
-    """Free Google News RSS (backup)"""
     try:
         url = f"https://news.google.com/rss/search?q={requests.utils.quote(query)}&hl=en&gl=EU&ceid=EU:en"
         feed = feedparser.parse(url)
@@ -112,7 +121,7 @@ def search_google_news(query: str, max_entries: int = 8) -> str:
             title = entry.get("title", "")
             link = entry.get("link", "")
             published = entry.get("published", "")
-            summary = entry.get("summary", "")[:300]
+            summary = entry.get("summary", "")[:350]
             results.append(f"Title: {title}\nDate: {published}\nURL: {link}\nSummary: {summary}")
         text = "\n\n---\n\n".join(results)
         print(f"    → Google News: {len(results)} articoli ({len(text)} caratteri)")
@@ -128,40 +137,40 @@ def analyze_leads_with_ai(combined_text: str, api_key: str) -> pd.DataFrame:
         prompt = f"""
 You are a senior B2B sales intelligence analyst specialized in pharmaceutical Visual Inspection (AVI) and Container Closure Integrity Testing (CCIT) equipment in Europe.
 
-Analyze the following raw text from web searches and news.
+Analyze the following raw text (searches from 2026 onwards, LinkedIn, PDA, news, Reddit, etc.).
 
 Extract commercial opportunities for selling Automated Visual Inspection machines and/or CCIT systems.
-Be pragmatic: include also early signals and medium-quality opportunities.
+Include also early signals, rumors, capacity expansions and medium-quality opportunities.
 
 Focus on:
-1. NEW INVESTMENTS / new sterile or parenteral lines
+1. NEW INVESTMENTS / new sterile or parenteral lines / new filling lines
 2. UPGRADES / REVAMPING of inspection equipment
-3. REGULATORY / QUALITY issues (recalls, warning letters, particulate, leak, sterility)
+3. REGULATORY / QUALITY issues (recalls, warning letters, particulate, leak, sterility, Annex 1)
 4. CAPACITY EXPANSIONS in Europe
 
-Ignore pure distributors of used equipment and pure academic content.
+Ignore pure used-equipment dealers and pure academic papers.
 
 Return ONLY a valid JSON array:
 [
   {{
-    "Source_Channel": "Web Search" or "News",
+    "Source_Channel": "LinkedIn" or "PDA" or "News" or "Reddit" or "Web Search",
     "Company_Or_Entity": "Name",
     "Country": "Country",
-    "Project_Type": "New Investment" or "Upgrade/Revamping" or "Regulatory/Quality Signal" or "Capacity Expansion",
+    "Project_Type": "New Investment" or "Upgrade/Revamping" or "Regulatory/Quality Signal" or "Capacity Expansion" or "Rumor/Early Signal",
     "Priority": "Hot" or "Warm" or "Early Signal",
-    "Detected_Opportunity": "Clear explanation",
-    "Suggested_Action": "Concrete next step",
-    "Source_Context": "Short evidence"
+    "Detected_Opportunity": "Clear explanation why this is relevant for Visual Inspection / CCIT",
+    "Suggested_Action": "Concrete next step for a sales person",
+    "Source_Context": "Short evidence snippet"
   }}
 ]
 
 If nothing relevant, return [].
 
 Raw data:
-{combined_text[:32000]}
+{combined_text[:35000]}
 """
         response = client.models.generate_content(
-            model="gemini-3.8-flash",
+            model="gemini-2.5-flash",
             contents=prompt,
             config=types.GenerateContentConfig(response_mime_type="application/json"),
         )
@@ -185,21 +194,21 @@ def analyze_competitors_with_ai(competitor_data: dict, api_key: str) -> pd.DataF
         prompt = f"""
 You are a competitive intelligence analyst for Syntegon (pharmaceutical Visual Inspection & CCIT equipment).
 
-Analyze recent public information about:
+Analyze recent public information (2026) about:
 - Körber (including Seidenader)
 - Stevanato Group
 - Brevetti CEA
 
-Extract actionable intelligence (new contracts, installations, product launches, partnerships, messaging).
+Extract actionable intelligence: new contracts, installations, product launches, partnerships, messaging, rumors.
 
 Return ONLY a valid JSON array:
 [
   {{
     "Competitor": "Körber" or "Stevanato" or "Brevetti",
-    "Type": "Product Launch" or "New Contract/Installation" or "Partnership" or "Messaging/Positioning" or "Weakness/Limitation" or "Other",
-    "Summary": "Clear summary",
-    "Implication_for_Syntegon": "What this means for Syntegon",
-    "Suggested_Response": "What sales should do",
+    "Type": "Product Launch" or "New Contract/Installation" or "Partnership" or "Messaging/Positioning" or "Weakness/Limitation" or "Rumor" or "Other",
+    "Summary": "Clear summary of the finding",
+    "Implication_for_Syntegon": "What this means for Syntegon sales strategy",
+    "Suggested_Response": "What Syntegon sales should do or say",
     "Source_Context": "Short evidence"
   }}
 ]
@@ -207,10 +216,10 @@ Return ONLY a valid JSON array:
 If nothing relevant, return [].
 
 Raw data:
-{all_text[:32000]}
+{all_text[:35000]}
 """
         response = client.models.generate_content(
-            model="gemini-3.8-flash",
+            model="gemini-2.5-flash",
             contents=prompt,
             config=types.GenerateContentConfig(response_mime_type="application/json"),
         )
@@ -231,7 +240,7 @@ def send_email_with_excel(file_path: str, to_email: str, from_email: str, app_pa
     msg["Subject"] = f"Syntegon Intelligence Report – Leads + Competitors ({datetime.now().strftime('%d-%m-%Y')})"
     body = (
         "Ciao,\n\n"
-        "In allegato il report settimanale di market & competitive intelligence.\n\n"
+        "In allegato il report settimanale di market & competitive intelligence (ricerca 2026).\n\n"
         "Contiene due fogli:\n"
         "1. Leads\n"
         "2. Competitor Intelligence\n\n"
@@ -267,18 +276,18 @@ if __name__ == "__main__":
         print("ERRORE: GEMINI_API_KEY non impostata.")
         exit(1)
     if not SERPER_API_KEY:
-        print("ERRORE: SERPER_API_KEY non impostata. Aggiungila come secret su GitHub.")
+        print("ERRORE: SERPER_API_KEY non impostata.")
         exit(1)
 
-    print("=== FASE 1: Ricerca Lead (Serper + Google News) ===")
+    print("=== FASE 1: Ricerca Lead aggressiva (2026 + LinkedIn + PDA + Reddit) ===")
     raw_leads = ""
 
     print("\n--- Serper Search ---")
     for q in LEAD_QUERIES:
-        print(f"  Query: {q[:75]}...")
+        print(f"  Query: {q[:80]}...")
         raw_leads += f"--- QUERY: {q} ---\n{search_serper(q)}\n\n"
 
-    print("\n--- Google News (backup) ---")
+    print("\n--- Google News ---")
     for q in GOOGLE_NEWS_QUERIES:
         print(f"  News: {q[:70]}...")
         raw_leads += f"--- GOOGLE NEWS: {q} ---\n{search_google_news(q)}\n\n"
@@ -294,7 +303,7 @@ if __name__ == "__main__":
         texts = []
         for q in queries:
             texts.append(search_serper(q))
-        texts.append(search_google_news(f"{competitor} inspection OR AVI OR pharmaceutical"))
+        texts.append(search_google_news(f"{competitor} inspection OR AVI OR pharmaceutical 2026"))
         competitor_raw[competitor] = texts
 
     df_competitors = analyze_competitors_with_ai(competitor_raw, GEMINI_API_KEY)
