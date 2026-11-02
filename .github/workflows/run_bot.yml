@@ -26,6 +26,6 @@ jobs:
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         EMAIL_USER: ${{ secrets.EMAIL_USER }}
         EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
-        RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+        RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }} 
         SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
       run: python lead_bot.py
