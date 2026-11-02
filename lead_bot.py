@@ -45,16 +45,51 @@ def generate_json(client, prompt: str):
 # CONFIGURATION - Query semplificate e stabili
 # ============================================================
 
-LEAD_QUERIES = [
-    'visual inspection OR AVI CDMO expansion OR "new line" OR investment 2026',
-    'CDMO "filling line" OR "inspection line" OR AVI Europe 2026',
-    '"visual inspection machine" upgrade OR replacement OR revamping pharma 2026',
-    'Annex 1 visual inspection OR CCIT OR "leak test" upgrade 2026',
-    '"warning letter" OR recall particulate OR sterility OR "container closure" pharma Europe 2026',
-    'site:linkedin.com "visual inspection" OR AVI CDMO OR pharma 2026',
-    'site:pda.org visual inspection OR AVI OR CCIT 2026',
-    'site:reddit.com visual inspection OR AVI OR "false reject" pharma',
-]
+# Ricerche per canale. Il secondo valore e' la finestra temporale Google (tbs):
+# qdr:w = ultima settimana, qdr:m = ultimo mese, qdr:y = ultimo anno
+LEAD_GROUPS = {
+    "News & Investimenti": ("qdr:m", [
+        'CDMO expansion sterile fill finish Europe new facility',
+        'pharma "new filling line" OR "fill-finish" OR "aseptic filling" investment Europe',
+        'prefilled syringe OR autoinjector OR vial capacity expansion Europe pharma',
+        'GLP-1 OR semaglutide OR tirzepatide fill finish capacity Europe',
+        'biosimilar OR "cell and gene" OR ADC manufacturing facility Europe investment',
+        'pharma plant groundbreaking OR inauguration OR "opens new" sterile injectables Europe',
+        '"visual inspection" OR "automated inspection" pharma new equipment installation OR purchase',
+    ]),
+    "LinkedIn": ("qdr:m", [
+        'site:linkedin.com/posts "visual inspection" pharma OR CDMO',
+        'site:linkedin.com/posts "fill finish" OR "filling line" expansion Europe',
+        'site:linkedin.com/posts AVI OR "automated visual inspection" OR "container closure integrity"',
+        'site:linkedin.com/posts CDMO "new site" OR "new facility" OR investing sterile injectables',
+        'site:linkedin.com/pulse "visual inspection" OR "Annex 1" pharma',
+    ]),
+    "Forum & Community": ("qdr:y", [
+        'site:reddit.com "visual inspection" pharma OR AVI OR "false reject"',
+        'site:reddit.com "fill finish" OR "inspection machine" pharma OR biotech',
+        'site:pda.org "visual inspection" OR AVI OR CCIT',
+        'site:ispe.org "visual inspection" OR "container closure" OR "Annex 1"',
+        'site:researchgate.net OR site:quora.com "automated visual inspection" pharma',
+        'forum AVI OR "visual inspection" particles parenteral problem OR challenge OR "false rejects"',
+    ]),
+    "Regolatorio & Qualita": ("qdr:y", [
+        'FDA "warning letter" parenteral particulate OR sterility OR "container closure"',
+        'EudraGMDP OR "GMP non-compliance" sterile injectable manufacturer',
+        'recall "visible particles" OR "glass particles" OR particulate injectable Europe',
+        'MHRA OR BfArM OR AIFA OR ANSM sterile injectables recall OR inspection finding',
+        'Annex 1 "contamination control strategy" visual inspection OR CCIT upgrade pharma',
+    ]),
+    "Job & Hiring": ("qdr:m", [
+        'site:linkedin.com/jobs "visual inspection" pharma OR AVI engineer',
+        'hiring "visual inspection" OR "automated inspection" sterile manufacturing Europe QA engineer',
+        'jobs "AVI" OR "visual inspection" validation OR qualification pharma Europe',
+    ]),
+    "Gare & Eventi": ("qdr:y", [
+        'site:ted.europa.eu inspection machine pharmaceutical OR vials OR syringes',
+        'CPHI OR Achema OR Pharmapack OR Interphex "visual inspection" AVI exhibitor OR presentation',
+        'tender OR "request for proposal" visual inspection machine pharmaceutical',
+    ]),
+}
 
 COMPETITOR_QUERIES = {
     "Körber": [
@@ -75,15 +110,18 @@ COMPETITOR_QUERIES = {
 }
 
 GOOGLE_NEWS_QUERIES = [
-    'visual inspection OR AVI OR CCIT pharmaceutical 2026',
-    'CDMO expansion OR "filling line" OR inspection 2026',
-    'Körber OR Seidenader inspection OR AVI 2026',
-    'Stevanato inspection OR AVI 2026',
-    'Brevetti CEA inspection OR AVI 2026',
+    'visual inspection OR AVI OR CCIT pharmaceutical',
+    'CDMO expansion OR investment parenteral OR injectable Europe',
+    'sterile fill finish new facility OR new line Europe',
+    'pharma recall particulate OR sterility injectable Europe',
+    'GLP-1 fill finish capacity expansion Europe',
+    'Körber OR Seidenader inspection OR AVI',
+    'Stevanato inspection OR AVI OR CCIT',
+    'Brevetti CEA inspection OR AVI',
 ]
 
 
-def search_serper(query: str, max_results: int = 10) -> str:
+def search_serper(query: str, max_results: int = 10, tbs: str = "") -> str:
     api_key = os.getenv("SERPER_API_KEY", "").strip()
     if not api_key:
         print("    → SERPER_API_KEY non impostata")
@@ -100,7 +138,13 @@ def search_serper(query: str, max_results: int = 10) -> str:
             "num": max_results,
             "hl": "en"
         }
+        if tbs:
+            payload["tbs"] = tbs
         response = requests.post(url, headers=headers, json=payload, timeout=20)
+        if not response.ok and tbs:
+            print(f"    → Serper HTTP {response.status_code} con filtro tempo, riprovo senza")
+            payload.pop("tbs", None)
+            response = requests.post(url, headers=headers, json=payload, timeout=20)
         if not response.ok:
             print(f"    → Serper HTTP {response.status_code}: {response.text[:300]}")
             return ""
@@ -147,53 +191,117 @@ def search_google_news(query: str, max_entries: int = 8) -> str:
         return ""
 
 
-def analyze_leads_with_ai(combined_text: str, api_key: str) -> pd.DataFrame:
+def parse_json_array(text: str):
+    """Estrae un array JSON; se la risposta e' troncata recupera gli oggetti completi."""
+    text = (text or "").strip()
+    match = re.search(r"\[.*\]", text, re.DOTALL)
+    candidate = match.group(0) if match else text
     try:
-        client = genai.Client(api_key=api_key)
-        prompt = f"""
-You are a senior B2B sales intelligence analyst specialized in pharmaceutical Visual Inspection (AVI) and Container Closure Integrity Testing (CCIT) equipment in Europe.
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        start = candidate.find("[")
+        end = candidate.rfind("}")
+        if start != -1 and end > start:
+            return json.loads(candidate[start:end + 1] + "]")
+        raise
 
-Analyze the following raw text from web searches and news (focused on 2026).
 
-Extract commercial opportunities for selling Automated Visual Inspection machines and/or CCIT systems.
-Include early signals, rumors and medium-quality opportunities.
+LEAD_PROMPT = """
+You are a senior B2B sales intelligence analyst for Syntegon, selling pharmaceutical Automated Visual Inspection (AVI) machines and Container Closure Integrity Testing (CCIT) systems in Europe.
 
-Focus on:
-1. NEW INVESTMENTS / new sterile or parenteral lines
-2. UPGRADES / REVAMPING of inspection equipment
-3. REGULATORY / QUALITY issues (recalls, warning letters, particulate, leak, sterility, Annex 1)
-4. CAPACITY EXPANSIONS in Europe
+The raw data below comes from the channel: {channel}.
 
-Return ONLY a valid JSON array:
+GOAL: maximize RECALL. We want every possible sales opportunity, including weak signals, rumors, indirect clues and unverified claims. A sales person will verify them later. Do NOT filter out an item just because it is uncertain; label the uncertainty in "Confidence".
+
+Count as an opportunity anything suggesting a company may need inspection or CCIT equipment, for example:
+- new or expanded sterile / parenteral / fill-finish sites, lines, capacity (vials, syringes, cartridges, autoinjectors, pens, GLP-1, biosimilars, ADC, cell & gene)
+- upgrades, replacement, retrofit or revalidation of inspection equipment; high false-reject rates; manual inspection being automated
+- quality / regulatory events: recalls, particulates, sterility, leaks, warning letters, GMP findings, Annex 1 compliance projects
+- hiring for inspection, QA sterile, validation or engineering roles at a pharma site (investment signal)
+- tenders, RFPs, conference talks, forum complaints, posts from people at pharma companies about inspection problems
+- customers of competitors (Koerber/Seidenader, Stevanato, Brevetti CEA, Antares Vision, CMP) with ageing machines or issues
+- M&A or ownership changes of pharma manufacturing sites
+
+Rules:
+- Use ONLY information present in the raw data. Never invent companies, facts or URLs.
+- "Source_URL" must be copied from the raw data item the signal comes from.
+- If the company is unclear, write "Unknown - to identify" and still include the item when the signal is meaningful.
+- Prefer Europe, but include non-European signals as "Early Signal" if they involve groups with European plants.
+- Return up to 30 items, most promising first.
+
+Return ONLY a valid JSON array (no markdown):
 [
   {{
-    "Source_Channel": "LinkedIn" or "PDA" or "News" or "Reddit" or "Web Search",
+    "Source_Channel": "{channel}",
     "Company_Or_Entity": "Name",
-    "Country": "Country",
-    "Project_Type": "New Investment" or "Upgrade/Revamping" or "Regulatory/Quality Signal" or "Capacity Expansion" or "Rumor/Early Signal",
+    "Country": "Country or Unknown",
+    "Project_Type": "New Investment" or "Capacity Expansion" or "Upgrade/Revamping" or "Regulatory/Quality Signal" or "Hiring Signal" or "Tender/Event" or "Competitor Customer" or "Rumor/Early Signal",
+    "Confidence": "Confirmed" or "Likely" or "Weak signal / Rumor",
     "Priority": "Hot" or "Warm" or "Early Signal",
-    "Detected_Opportunity": "Clear explanation",
-    "Suggested_Action": "Concrete next step",
+    "Detected_Opportunity": "What is happening, in plain language",
+    "Why_It_Matters": "Why this could mean AVI/CCIT demand",
+    "Suggested_Action": "Concrete next step for sales",
+    "Verification_Step": "How to verify this signal quickly",
+    "Source_URL": "URL from the raw data",
     "Source_Context": "Short evidence"
   }}
 ]
 
-If nothing relevant, return [].
+If really nothing is related, return [].
 
 Raw data:
-{combined_text[:35000]}
+{text}
 """
-        response = generate_json(client, prompt)
-        text_response = response.text or ""
-        print(f"    → Gemini risposta ({len(text_response)} car.): {text_response[:300]!r}")
-        match = re.search(r"\[.*\]", text_response, re.DOTALL)
-        clean_json = match.group(0) if match else text_response.strip()
-        data = json.loads(clean_json)
-        return pd.DataFrame(data)
-    except Exception as e:
-        import traceback; traceback.print_exc()
-        print(f"Error in lead analysis: {e}")
+
+BATCH_CHARS = 28000
+
+
+def split_batches(text: str, size: int = BATCH_CHARS):
+    """Spezza il testo senza tagliare a meta' un risultato di ricerca."""
+    blocks = text.split("\n\n---\n\n")
+    batches, current = [], ""
+    for block in blocks:
+        if current and len(current) + len(block) > size:
+            batches.append(current)
+            current = ""
+        current += block + "\n\n---\n\n"
+    if current.strip():
+        batches.append(current)
+    return batches
+
+
+def analyze_leads_with_ai(texts_by_channel: dict, api_key: str) -> pd.DataFrame:
+    client = genai.Client(api_key=api_key)
+    frames = []
+    for channel, text in texts_by_channel.items():
+        if len(text.strip()) < 200:
+            print(f"  [{channel}] pochi dati, salto")
+            continue
+        for i, batch in enumerate(split_batches(text), start=1):
+            print(f"  [{channel}] batch {i} ({len(batch)} car.)")
+            try:
+                response = generate_json(client, LEAD_PROMPT.format(channel=channel, text=batch))
+                raw = response.text or ""
+                print(f"    → Gemini risposta ({len(raw)} car.): {raw[:200]!r}")
+                data = parse_json_array(raw)
+                print(f"    → {len(data)} segnali estratti")
+                if data:
+                    frames.append(pd.DataFrame(data))
+            except Exception as e:
+                import traceback; traceback.print_exc()
+                print(f"    → Errore analisi [{channel}] batch {i}: {e}")
+            time.sleep(3)
+    if not frames:
         return pd.DataFrame()
+    df = pd.concat(frames, ignore_index=True)
+    for col in ("Company_Or_Entity", "Project_Type", "Source_URL"):
+        if col not in df.columns:
+            df[col] = ""
+    df = df.drop_duplicates(subset=["Company_Or_Entity", "Project_Type", "Source_URL"], keep="first")
+    order = {"Hot": 0, "Warm": 1, "Early Signal": 2}
+    if "Priority" in df.columns:
+        df = df.sort_values(by="Priority", key=lambda c: c.map(order).fillna(3), kind="stable")
+    return df.reset_index(drop=True)
 
 
 def analyze_competitors_with_ai(competitor_data: dict, api_key: str) -> pd.DataFrame:
@@ -289,25 +397,33 @@ if __name__ == "__main__":
         print("ERRORE: SERPER_API_KEY non impostata.")
         exit(1)
 
-    print("=== FASE 1: Ricerca Lead ===")
-    raw_leads = ""
+    print("=== FASE 1: Ricerca Lead (360 gradi) ===")
+    lead_texts = {}
+    total_chars = 0
 
-    print("\n--- Serper Search ---")
-    for q in LEAD_QUERIES:
-        print(f"  Query: {q[:75]}...")
-        raw_leads += f"--- QUERY: {q} ---\n{search_serper(q)}\n\n"
+    for channel, (tbs, queries) in LEAD_GROUPS.items():
+        print(f"\n--- {channel} ---")
+        chunks = []
+        for q in queries:
+            print(f"  Query: {q[:75]}...")
+            chunks.append(f"--- QUERY ({channel}): {q} ---\n{search_serper(q, tbs=tbs)}")
+        lead_texts[channel] = "\n\n---\n\n".join(chunks)
+        total_chars += len(lead_texts[channel])
 
     print("\n--- Google News ---")
+    news_chunks = []
     for q in GOOGLE_NEWS_QUERIES:
         print(f"  News: {q[:70]}...")
-        raw_leads += f"--- GOOGLE NEWS: {q} ---\n{search_google_news(q)}\n\n"
+        news_chunks.append(f"--- GOOGLE NEWS: {q} ---\n{search_google_news(q)}")
+    lead_texts["Google News"] = "\n\n---\n\n".join(news_chunks)
+    total_chars += len(lead_texts["Google News"])
 
-    print(f"\nTotale testo raccolto: {len(raw_leads)} caratteri")
-    if len(raw_leads) < 2000:
+    print(f"\nTotale testo raccolto: {total_chars} caratteri")
+    if total_chars < 2000:
         print("ERRORE: quasi nessun dato dalle ricerche (Serper/Google News). Controlla i log sopra.")
         exit(1)
     print("Analisi lead con AI...")
-    df_leads = analyze_leads_with_ai(raw_leads, GEMINI_API_KEY)
+    df_leads = analyze_leads_with_ai(lead_texts, GEMINI_API_KEY)
 
     print("\n=== FASE 2: Competitor Intelligence ===")
     competitor_raw = {}
@@ -325,7 +441,6 @@ if __name__ == "__main__":
 
     with pd.ExcelWriter(file_name, engine="openpyxl") as writer:
         if df_leads is not None and not df_leads.empty:
-            df_leads = df_leads.drop_duplicates(subset=["Company_Or_Entity"], keep="first")
             df_leads.to_excel(writer, sheet_name="Leads", index=False)
             print(f"Lead trovati: {len(df_leads)}")
         else:
