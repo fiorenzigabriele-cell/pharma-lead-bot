@@ -3,7 +3,7 @@ import smtplib
 import json
 import requests
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
@@ -78,6 +78,15 @@ LEAD_GROUPS = {
         'recall "visible particles" OR "glass particles" OR particulate injectable Europe',
         'MHRA OR BfArM OR AIFA OR ANSM sterile injectables recall OR inspection finding',
         'Annex 1 "contamination control strategy" visual inspection OR CCIT upgrade pharma',
+    ]),
+    "Recall EU & Autorita": ("qdr:y", [
+        'BfArM Rueckruf Parenteralia OR Injektionsloesung Partikel OR Glaspartikel',
+        'AIFA ritiro lotto iniettabile OR fiale OR siringhe particelle OR sterilita',
+        'ANSM rappel lot injectable particules OR defaut sterilite OR flacon',
+        'MHRA drug alert injection recall particles OR "container closure" OR leak',
+        'AEMPS OR HPRA OR Swissmedic recall injectable particles OR sterility OR vial defect',
+        'EMA OR "Health Canada" OR TGA recall injectable "visible particles" OR "container defect"',
+        'recall syringe OR vial OR cartridge "cracked" OR "crack" OR "leaking" OR "seal defect" pharma',
     ]),
     "Job & Hiring": ("qdr:m", [
         'site:linkedin.com/jobs "visual inspection" pharma OR AVI engineer',
@@ -155,13 +164,14 @@ def search_serper(query: str, max_results: int = 10, tbs: str = "") -> str:
             title = item.get("title", "")
             link = item.get("link", "")
             snippet = item.get("snippet", "")
-            results.append(f"Title: {title}\nURL: {link}\nSnippet: {snippet}")
+            date = normalize_date(item.get("date", ""))
+            results.append(f"Title: {title}\nDate: {date or 'n/a'}\nURL: {link}\nSnippet: {snippet}")
 
         for item in data.get("news", [])[:5]:
             title = item.get("title", "")
             link = item.get("link", "")
             snippet = item.get("snippet", "")
-            date = item.get("date", "")
+            date = normalize_date(item.get("date", ""))
             results.append(f"[NEWS] {title}\nDate: {date}\nURL: {link}\nSnippet: {snippet}")
 
         text = "\n\n---\n\n".join(results)
@@ -180,7 +190,7 @@ def search_google_news(query: str, max_entries: int = 8) -> str:
         for entry in feed.entries[:max_entries]:
             title = entry.get("title", "")
             link = entry.get("link", "")
-            published = entry.get("published", "")
+            published = normalize_date(entry.get("published", ""))
             summary = entry.get("summary", "")[:300]
             results.append(f"Title: {title}\nDate: {published}\nURL: {link}\nSummary: {summary}")
         text = "\n\n---\n\n".join(results)
@@ -189,6 +199,155 @@ def search_google_news(query: str, max_entries: int = 8) -> str:
     except Exception as e:
         print(f"    → Google News error: {e}")
         return ""
+
+
+MASTER_FILE = "leads_master.xlsx"
+
+FDA_RECALL_TERMS = ["particulate", "particles", "container closure", "sterility", "leak",
+                    "crack", "glass", "foreign", "defective container", "visible"]
+FDA_FORM_RE = re.compile(r"\b(injection|injectable|vial|vials|syringe|syringes|ampule|ampoule|"
+                         r"cartridge|infusion|intravenous|parenteral|pen)\b", re.I)
+
+
+def normalize_date(value) -> str:
+    """Converte date relative ('3 days ago') o testuali in YYYY-MM-DD; altrimenti restituisce l'originale."""
+    v = str(value or "").strip()
+    if not v:
+        return ""
+    m = re.match(r"(\d+)\s*(minute|hour|day|week|month|year)s?\s+ago", v, re.I)
+    if m:
+        unit_days = {"minute": 0, "hour": 0, "day": 1, "week": 7, "month": 30, "year": 365}
+        days = int(m.group(1)) * unit_days[m.group(2).lower()]
+        return (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    try:
+        d = pd.to_datetime(v, errors="coerce", utc=True)
+        if pd.notna(d):
+            return d.strftime("%Y-%m-%d")
+    except Exception:
+        pass
+    return v
+
+
+def fetch_fda_recalls(days: int = 270) -> pd.DataFrame:
+    """Recall FDA su iniettabili legati a particolato, container closure, sterilita', leak (openFDA)."""
+    end = datetime.now()
+    start = end - timedelta(days=days)
+    rng = f"[{start:%Y%m%d}+TO+{end:%Y%m%d}]"
+    rows = {}
+    for term in FDA_RECALL_TERMS:
+        term_q = term.replace(" ", "+")
+        url = (f'https://api.fda.gov/drug/enforcement.json?search=reason_for_recall:"{term_q}"'
+               f"+AND+report_date:{rng}&limit=100")
+        try:
+            r = requests.get(url, timeout=30)
+            if r.status_code == 404:  # openFDA risponde 404 quando non ci sono risultati
+                continue
+            r.raise_for_status()
+            for item in r.json().get("results", []):
+                product = item.get("product_description", "") or ""
+                reason = item.get("reason_for_recall", "") or ""
+                if not FDA_FORM_RE.search(product + " " + reason):
+                    continue
+                key = item.get("recall_number") or f"{item.get('recalling_firm')}|{product[:40]}"
+                rd = str(item.get("report_date", ""))
+                rows[key] = {
+                    "Recall_Date": f"{rd[:4]}-{rd[4:6]}-{rd[6:8]}" if len(rd) == 8 else rd,
+                    "Firm": item.get("recalling_firm", ""),
+                    "Product": product[:150],
+                    "Reason": reason[:300],
+                    "Classification": item.get("classification", ""),
+                    "Status": item.get("status", ""),
+                    "Country": item.get("country", ""),
+                    "City": item.get("city", ""),
+                    "Recall_Number": item.get("recall_number", ""),
+                    "URL": f"https://www.accessdata.fda.gov/scripts/ires/index.cfm?Event={item.get('event_id', '')}",
+                }
+            print(f"    → openFDA '{term}': ok")
+        except Exception as e:
+            print(f"    → openFDA '{term}' errore: {e}")
+    df = pd.DataFrame(list(rows.values()))
+    if not df.empty:
+        df = df.sort_values("Recall_Date", ascending=False).reset_index(drop=True)
+    print(f"    → Recall FDA rilevanti: {len(df)}")
+    return df
+
+
+def recalls_to_text(df: pd.DataFrame, max_rows: int = 150) -> str:
+    if df is None or df.empty:
+        return ""
+    blocks = []
+    for _, r in df.head(max_rows).iterrows():
+        blocks.append(
+            f"Title: {r['Firm']} - {r['Product']}\nDate: {r['Recall_Date']}\nURL: {r['URL']}\n"
+            f"Snippet: FDA class {r['Classification']} ({r['Status']}), country {r['Country']}. Reason: {r['Reason']}"
+        )
+    return "\n\n---\n\n".join(blocks)
+
+
+PRIORITY_ORDER = {"Hot": 0, "Warm": 1, "Early Signal": 2}
+PREFERRED_COLS = ["NEW", "First_Seen", "Publication_Date", "Age_Days", "Priority", "Confidence",
+                  "Company_Or_Entity", "Country", "Project_Type", "Source_Channel",
+                  "Detected_Opportunity", "Why_It_Matters", "Suggested_Action",
+                  "Verification_Step", "Source_URL", "Source_Context", "Key"]
+
+
+def lead_key(row) -> str:
+    url = str(row.get("Source_URL", "") or "").strip()
+    if url.startswith("http"):
+        return url.split("#")[0].rstrip("/").lower()
+    return "|".join(str(row.get(c, "") or "").strip().lower()[:60]
+                    for c in ("Company_Or_Entity", "Project_Type", "Detected_Opportunity"))
+
+
+def add_age(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    if "Publication_Date" not in df.columns:
+        df["Publication_Date"] = ""
+    df["Publication_Date"] = df["Publication_Date"].apply(normalize_date)
+    dates = pd.to_datetime(df["Publication_Date"], errors="coerce")
+    df["Age_Days"] = (pd.Timestamp(datetime.now().date()) - dates).dt.days
+    return df
+
+
+def sort_and_order(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["_n"] = (df.get("NEW", "") != "NEW").astype(int)
+    df["_p"] = df["Priority"].map(PRIORITY_ORDER).fillna(3) if "Priority" in df.columns else 3
+    df["_a"] = df["Age_Days"].fillna(99999) if "Age_Days" in df.columns else 99999
+    df = df.sort_values(["_n", "_p", "_a"], kind="stable").drop(columns=["_n", "_p", "_a"])
+    cols = [c for c in PREFERRED_COLS if c in df.columns] + [c for c in df.columns if c not in PREFERRED_COLS]
+    return df[cols].reset_index(drop=True)
+
+
+def update_master(df_new: pd.DataFrame, master_path: str = MASTER_FILE):
+    """Unisce i lead di oggi allo storico. Ritorna (storico_completo, solo_nuovi)."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    master = pd.DataFrame()
+    if os.path.exists(master_path):
+        try:
+            master = pd.read_excel(master_path)
+            print(f"  Storico caricato: {len(master)} lead")
+        except Exception as e:
+            print(f"  Storico non leggibile ({e}), riparto da zero")
+    known = set(master["Key"].astype(str)) if "Key" in master.columns else set()
+
+    new_rows = pd.DataFrame()
+    if df_new is not None and not df_new.empty:
+        df_new = df_new.copy()
+        df_new["Key"] = df_new.apply(lead_key, axis=1)
+        df_new = df_new.drop_duplicates(subset="Key", keep="first")
+        new_rows = df_new[~df_new["Key"].isin(known)].copy()
+        new_rows["First_Seen"] = today
+        new_rows["NEW"] = "NEW"
+    if not master.empty:
+        master["NEW"] = ""
+
+    parts = [d for d in (new_rows, master) if not d.empty]
+    if not parts:
+        return pd.DataFrame(), pd.DataFrame()
+    all_df = add_age(pd.concat(parts, ignore_index=True))
+    new_df = all_df[all_df["NEW"] == "NEW"].copy()
+    return sort_and_order(all_df), sort_and_order(new_df) if not new_df.empty else pd.DataFrame()
 
 
 def parse_json_array(text: str):
@@ -242,6 +401,7 @@ Return ONLY a valid JSON array (no markdown):
     "Why_It_Matters": "Why this could mean AVI/CCIT demand",
     "Suggested_Action": "Concrete next step for sales",
     "Verification_Step": "How to verify this signal quickly",
+    "Publication_Date": "YYYY-MM-DD copied from the 'Date:' field of the source item; 'Unknown' if absent. Never guess",
     "Source_URL": "URL from the raw data",
     "Source_Context": "Short evidence"
   }}
@@ -351,7 +511,7 @@ Raw data:
         return pd.DataFrame()
 
 
-def send_email_with_excel(file_path: str, to_email: str, from_email: str, app_password: str):
+def send_email_with_excel(file_path: str, to_email: str, from_email: str, app_password: str, summary: str = ""):
     msg = MIMEMultipart()
     msg["From"] = from_email
     msg["To"] = to_email
@@ -359,9 +519,8 @@ def send_email_with_excel(file_path: str, to_email: str, from_email: str, app_pa
     body = (
         "Ciao,\n\n"
         "In allegato il report settimanale di market & competitive intelligence.\n\n"
-        "Contiene due fogli:\n"
-        "1. Leads\n"
-        "2. Competitor Intelligence\n\n"
+        f"{summary}\n\n"
+        "Fogli: Leads_Nuovi, Storico_Leads, Recalls_FDA, Competitor_Intelligence\n\n"
         "Buon lavoro,\n"
         "Pharma Lead Bot"
     )
@@ -418,6 +577,11 @@ if __name__ == "__main__":
     lead_texts["Google News"] = "\n\n---\n\n".join(news_chunks)
     total_chars += len(lead_texts["Google News"])
 
+    print("\n--- Recall FDA (openFDA) ---")
+    df_recalls = fetch_fda_recalls()
+    lead_texts["Recall FDA (openFDA)"] = recalls_to_text(df_recalls)
+    total_chars += len(lead_texts["Recall FDA (openFDA)"])
+
     print(f"\nTotale testo raccolto: {total_chars} caratteri")
     if total_chars < 2000:
         print("ERRORE: quasi nessun dato dalle ricerche (Serper/Google News). Controlla i log sopra.")
@@ -439,29 +603,43 @@ if __name__ == "__main__":
 
     file_name = f"Syntegon_Intelligence_Report_{datetime.now().strftime('%Y%m%d')}.xlsx"
 
-    with pd.ExcelWriter(file_name, engine="openpyxl") as writer:
-        if df_leads is not None and not df_leads.empty:
-            df_leads.to_excel(writer, sheet_name="Leads", index=False)
-            print(f"Lead trovati: {len(df_leads)}")
-        else:
-            pd.DataFrame({"Info": ["Nessun lead rilevante questa settimana"]}).to_excel(
-                writer, sheet_name="Leads", index=False
-            )
-            print("Nessun lead trovato.")
+    print("\n=== Storico lead ===")
+    df_all, df_new = update_master(df_leads)
 
+    with pd.ExcelWriter(file_name, engine="openpyxl") as writer:
+        if not df_new.empty:
+            df_new.to_excel(writer, sheet_name="Leads_Nuovi", index=False)
+        else:
+            pd.DataFrame({"Info": ["Nessun lead NUOVO questa settimana"]}).to_excel(
+                writer, sheet_name="Leads_Nuovi", index=False)
+        if not df_all.empty:
+            df_all.to_excel(writer, sheet_name="Storico_Leads", index=False)
+        else:
+            pd.DataFrame({"Info": ["Nessun lead rilevante"]}).to_excel(
+                writer, sheet_name="Storico_Leads", index=False)
+        if df_recalls is not None and not df_recalls.empty:
+            df_recalls.to_excel(writer, sheet_name="Recalls_FDA", index=False)
+        else:
+            pd.DataFrame({"Info": ["Nessun recall FDA rilevante"]}).to_excel(
+                writer, sheet_name="Recalls_FDA", index=False)
         if df_competitors is not None and not df_competitors.empty:
             df_competitors.to_excel(writer, sheet_name="Competitor_Intelligence", index=False)
-            print(f"Insight competitor: {len(df_competitors)}")
         else:
             pd.DataFrame({"Info": ["Nessun movimento competitor rilevante"]}).to_excel(
-                writer, sheet_name="Competitor_Intelligence", index=False
-            )
-            print("Nessun insight competitor.")
+                writer, sheet_name="Competitor_Intelligence", index=False)
+
+    if not df_all.empty:
+        df_all.to_excel(MASTER_FILE, index=False)
+    n_new, n_all = len(df_new), len(df_all)
+    n_rec = 0 if df_recalls is None else len(df_recalls)
+    print(f"Lead nuovi: {n_new} | storico: {n_all} | recall FDA: {n_rec}")
+    summary = (f"Nuovi lead questa settimana: {n_new} (storico totale: {n_all}). "
+               f"Recall FDA rilevanti trovati: {n_rec}.")
 
     both_empty = (df_leads is None or df_leads.empty) and (df_competitors is None or df_competitors.empty)
 
     if EMAIL_USER and EMAIL_PASS and RECEIVER_EMAIL:
-        send_email_with_excel(file_name, RECEIVER_EMAIL, EMAIL_USER, EMAIL_PASS)
+        send_email_with_excel(file_name, RECEIVER_EMAIL, EMAIL_USER, EMAIL_PASS, summary)
     else:
         print(f"Report salvato localmente: {file_name}")
 
